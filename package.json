@@ -1,0 +1,10 @@
+{
+  "name": "nav-weather",
+  "version": "0.1.0",
+  "description": "Open-source navigation with weather forecasts along your route and at your destination",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  }
+}

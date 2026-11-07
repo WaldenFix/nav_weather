@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Nav Weather</title>
+  <meta name="description" content="Open-source navigation with weather forecasts along your route and at your destination.">
+  <meta name="theme-color" content="#1d4ed8">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <!-- iPhone: "Add to Home Screen" opens full-screen with this icon and name -->
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Nav Weather">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="map"></div>
+
+  <aside id="panel" class="panel">
+    <header class="panel-head">
+      <h1>Nav Weather</h1>
+      <button id="collapse" class="icon-btn" title="Collapse panel" aria-label="Collapse panel">▾</button>
+    </header>
+
+    <div class="panel-body">
+      <section id="chaser" class="chaser" hidden>
+        <h2>Storm chaser</h2>
+        <p class="hint">Finds where thunderstorms are most likely in the next 12 hours, then routes you there in time.</p>
+        <button type="button" id="scan" class="primary">Scan this map area</button>
+        <div id="scan-status" class="hint"></div>
+        <ul id="targets" class="targets"></ul>
+        <div id="warnings" class="warnings"></div>
+        <p class="safety">⚠️ This is forecast guidance, not a warning system. Never drive into a hail core, rain-wrapped area or flooded road. Always keep an escape route and follow official NWS warnings.</p>
+      </section>
+
+      <section id="watcher" class="chaser" hidden>
+        <h2>Storm watcher</h2>
+        <div class="segmented" role="radiogroup" aria-label="What to watch">
+          <button type="button" role="radio" data-kind="thunder" aria-checked="true">⚡ Thunderstorms</button>
+          <button type="button" role="radio" data-kind="coast" aria-checked="false">🌊 Wind &amp; waves</button>
+        </div>
+        <p class="hint" data-for="thunder">Finds a safe, dry spot with a clear view of a storm: cloud structure by day, lightning after dark.</p>
+        <p class="hint" data-for="coast" hidden>Finds the best spot on the coast to watch big surf and wind, and the best time you can get there (next 36 hours).</p>
+        <button type="button" id="watch-scan" class="primary">Find viewing spots in this area</button>
+        <div id="watch-status" class="hint"></div>
+        <ul id="spots" class="targets"></ul>
+        <div id="watch-warnings" class="warnings"></div>
+        <p class="safety" data-for="thunder">⚡ Lightning can strike 10+ miles from a storm, out of clear sky. Watch from <strong>inside a hard-top car</strong>, not standing beside it. If you hear thunder, you're in range. Don't park under trees, on hilltops in the open, or in dips that can flood, and keep an escape route open behind you.</p>
+        <p class="safety" data-for="coast" hidden>🌊 Storm waves run far further up the beach than you expect, and "sneaker waves" come without warning. Watch from high ground or your car, <strong>never turn your back on the ocean</strong>, and stay off jetties, rocks and driftwood logs (waves roll them). In high wind, avoid parking under trees.</p>
+      </section>
+
+      <form id="route-form" autocomplete="off">
+        <div class="field">
+          <label for="from">From</label>
+          <div class="input-row">
+            <input id="from" type="text" placeholder="Start address or place" spellcheck="false">
+            <button type="button" id="locate" class="icon-btn" title="Use my location" aria-label="Use my location">◎</button>
+          </div>
+          <ul class="suggestions" id="from-suggestions" role="listbox"></ul>
+        </div>
+        <div class="field">
+          <label for="via">Via <span class="optional">(optional, e.g. Albuquerque to take I-40)</span></label>
+          <div class="input-row">
+            <input id="via" type="text" placeholder="Go through a town or road" spellcheck="false">
+            <button type="button" id="clear-via" class="icon-btn" title="Remove stop" aria-label="Remove stop">✕</button>
+          </div>
+          <ul class="suggestions" id="via-suggestions" role="listbox"></ul>
+        </div>
+        <div class="field">
+          <label for="to">To</label>
+          <div class="input-row">
+            <input id="to" type="text" placeholder="Destination" spellcheck="false">
+            <button type="button" id="swap" class="icon-btn" title="Swap start and destination" aria-label="Swap">⇅</button>
+          </div>
+          <ul class="suggestions" id="to-suggestions" role="listbox"></ul>
+        </div>
+
+        <div class="field">
+          <label for="depart">Leave <strong id="depart-label">now</strong></label>
+          <input id="depart" type="range" min="0" max="72" step="0.25" value="0">
+        </div>
+
+        <button type="submit" id="go" class="primary">Get route &amp; weather</button>
+      </form>
+
+      <div id="status" class="status" hidden></div>
+
+      <section id="results" hidden>
+        <h2>Routes</h2>
+        <div class="route-options" id="route-options"></div>
+        <div class="hint" id="alt-status"></div>
+
+        <div class="summary" id="summary"></div>
+        <div id="intercept" class="intercept" hidden></div>
+        <div id="best-time" class="best-time" hidden></div>
+
+        <h2>Along the route</h2>
+        <div class="timeline" id="timeline"></div>
+        <ul class="alerts" id="alerts"></ul>
+
+        <section id="road-section" hidden>
+          <h2>Road reports</h2>
+          <ul class="alerts" id="road-reports"></ul>
+        </section>
+
+        <h2>At your destination</h2>
+        <div class="dest" id="dest"></div>
+
+        <details class="steps">
+          <summary>Turn-by-turn directions</summary>
+          <ol id="steps"></ol>
+        </details>
+
+        <button id="start-nav" class="primary">Start navigation</button>
+      </section>
+
+      <details class="settings" id="settings">
+        <summary>Settings</summary>
+        <label for="wsdot-code">WSDOT access code <span class="optional">(Washington road closures, incidents &amp; pass conditions)</span></label>
+        <div class="input-row">
+          <input id="wsdot-code" type="text" placeholder="Paste your free access code" spellcheck="false" autocomplete="off">
+          <button type="button" id="wsdot-save" class="icon-btn" title="Save" aria-label="Save access code">✓</button>
+        </div>
+        <p class="hint">Get one free at <a href="https://wsdot.wa.gov/traffic/api/" target="_blank" rel="noopener">wsdot.wa.gov/traffic/api</a> (just an email address). It's stored only on this device.</p>
+      </details>
+    </div>
+  </aside>
+
+  <div id="nav-banner" class="nav-banner" hidden>
+    <div class="nav-instruction" id="nav-instruction"></div>
+    <div class="nav-meta" id="nav-meta"></div>
+    <div class="nav-weather" id="nav-weather"></div>
+    <button id="stop-nav" class="icon-btn" title="End navigation" aria-label="End navigation">✕</button>
+  </div>
+
+  <div class="map-controls">
+    <button id="toggle-chaser" class="chip" aria-pressed="false">⛈️ Storm chaser</button>
+    <button id="toggle-watcher" class="chip" aria-pressed="false">🔭 Storm watcher</button>
+    <button id="toggle-radar" class="chip" aria-pressed="false">Radar</button>
+    <button id="toggle-units" class="chip">°F · mi</button>
+  </div>
+
+  <!-- Colours from RainViewer's "Universal Blue" scheme (rainviewer.com/files/rainviewer_api_colors_table.csv). -->
+  <div id="radar-legend" class="radar-legend" hidden>
+    <div>Radar: rain &amp; snow (not wind)</div>
+    <div class="bar" style="background: linear-gradient(90deg, #88ddee, #00a3e0 18%, #005588 36%, #ffee00 46%, #ffaa00 58%, #ff4400 70%, #c10000 82%, #ff77ff)"></div>
+    <div class="ends"><span>Light</span><span>Heavy</span><span>Hail</span></div>
+    <div class="bar" style="background: linear-gradient(90deg, #c3ffff, #7fbfff, #002fff)"></div>
+    <div class="ends"><span>Light snow</span><span>Heavy snow</span></div>
+  </div>
+
+  <footer class="attribution-note">
+    Weather <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> ·
+    Routing <a href="https://project-osrm.org/" target="_blank" rel="noopener">OSRM</a> ·
+    Search <a href="https://photon.komoot.io/" target="_blank" rel="noopener">Photon</a> ·
+    Warnings <a href="https://www.weather.gov/" target="_blank" rel="noopener">NWS</a>
+  </footer>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
