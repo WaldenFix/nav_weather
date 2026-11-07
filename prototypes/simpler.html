@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en" data-theme="night">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Simpler Panel</title>
+  <!-- Prototype: the results panel today vs. a version where shapes carry the
+       meaning instead of sentences. Sample data only; no network. -->
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    html, body { height: auto; min-height: 100%; }
+    body { padding: 20px 16px 48px; }
+    .bar { max-width: 860px; margin: 0 auto 16px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .bar h1 { margin: 0; font-size: 20px; }
+    .themes { display: flex; gap: 6px; }
+    .themes button { padding: 6px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--fg-soft); font-size: 12px; font-weight: 600; }
+    .themes button[aria-selected="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+    .cols { max-width: 860px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 24px; align-items: start; }
+    .col-head { display: flex; justify-content: space-between; align-items: baseline; margin: 0 4px 8px; }
+    .col-head b { font-size: 15px; }
+    .col-head span { font-size: 13px; color: var(--fg-soft); font-variant-numeric: tabular-nums; }
+    .col-head span strong { color: var(--fg); font-size: 17px; }
+    .card { padding: 18px; border-radius: 24px; background: var(--bg); border: 1px solid var(--border); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; }
+    .card .trip-card { margin-bottom: 4px; }
+
+    /* ---------- Simpler ---------- */
+    .hero { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .hero b { font-size: 40px; font-weight: 300; line-height: 1; text-shadow: var(--glow-text); font-variant-numeric: tabular-nums; }
+    .hero span { color: var(--fg-soft); font-size: 14px; }
+
+    /* Skyline: tower height = how rough the weather is. Ghost = another departure time. */
+    .sky { position: relative; height: 120px; }
+    .sky .base { position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--border); }
+    .tower { position: absolute; bottom: 0; border-radius: 8px 8px 0 0; background: var(--bg-soft); border-top: 3px solid var(--c); transition: height .3s; cursor: pointer; display: flex; justify-content: center; padding-top: 5px; font-size: 13px; }
+    .tower span { filter: var(--emoji-filter); }
+    .tower.sev2, .tower.sev3 { box-shadow: 0 -2px 10px -2px var(--c); }
+    .ghost { position: absolute; bottom: 0; border: 1.5px dashed var(--holo, var(--fg-soft)); border-bottom: none; border-radius: 8px 8px 0 0; pointer-events: none; transition: height .3s; }
+    .tip { position: absolute; z-index: 2; padding: 6px 10px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); box-shadow: var(--shadow-float); font-size: 12px; white-space: nowrap; transform: translate(-50%, -100%); }
+
+    .leave { display: flex; align-items: center; gap: 10px; }
+    .leave input { flex: 1; accent-color: var(--holo, var(--accent)); }
+    .leave .pill { min-width: 64px; text-align: center; }
+    .use { display: none; padding: 4px 10px; border: 1.5px dashed var(--holo); border-radius: 999px; background: none; color: var(--fg); font-size: 12px; font-weight: 600; }
+    .use.show { display: inline-block; }
+
+    /* Route choices: the shape is the worst weather on that route. */
+    .routes { display: flex; gap: 8px; }
+    .route { flex: 1; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 14px; border: 1.5px solid var(--border); background: var(--bg); color: var(--fg); font-size: 14px; font-weight: 600; text-align: left; }
+    .route.on { border: 2px solid var(--accent); box-shadow: var(--glow); }
+    .route small { display: block; font-size: 12px; font-weight: 400; color: var(--fg-soft); }
+    .sign { width: 22px; height: 22px; flex: none; }
+    .sign * { fill: none; stroke-width: 2.5; stroke-linejoin: round; }
+
+    .dest { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+    .dest .em { font-size: 26px; filter: var(--emoji-filter); }
+    .dest b { font-size: 20px; }
+    .dest span:last-child { color: var(--fg-soft); }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <h1>Same trip, fewer words</h1>
+    <div class="themes" id="themes">
+      <button data-theme="light">Light</button>
+      <button data-theme="dark">Dark</button>
+      <button data-theme="night" aria-selected="true">Night</button>
+    </div>
+  </div>
+
+  <div class="cols">
+    <!-- Today's results panel (same markup and classes as the app) -->
+    <div>
+      <div class="col-head"><b>Now</b><span><strong id="count-now"></strong> words</span></div>
+      <div class="card count" id="now">
+        <div class="summary">
+          <div><span>Distance</span><b>183 mi</b></div>
+          <div><span>Drive</span><b>3 h 39 m</b></div>
+          <div><span>Arrive</span><b>4:28 PM</b></div>
+        </div>
+        <p class="hint" style="margin:0">Includes 7 min of weather slow-downs</p>
+        <div class="best-time"><span>💡 Leaving today 3:00 PM looks like a calmer drive.</span><button>Use</button></div>
+        <div class="route-options">
+          <button class="route-option sev-2 selected"><div class="ro-title">via I-5<span class="tag">Fastest</span></div><div class="ro-meta">183 mi · 3 h 39 min · incl. 7 min for weather</div><div class="ro-wx">⚠️ 1 rough stretch · worst: caution</div></button>
+          <button class="route-option sev-1"><div class="ro-title">via US-101<span class="tag">Calmest</span></div><div class="ro-meta">240 mi · 4 h 53 min (+1 h 14 min)</div><div class="ro-wx">🌦️ Some light weather</div></button>
+        </div>
+        <div class="timeline">
+          <button class="tl-cell"><span class="tl-icon">🌤️</span><span>58°</span><span class="tl-time">1 PM</span></button>
+          <button class="tl-cell sev-1"><span class="tl-icon">🌦️</span><span>55°</span><span class="tl-time">2 PM</span></button>
+          <button class="tl-cell sev-2"><span class="tl-icon">🌧️</span><span>52°</span><span class="tl-time">2 PM</span></button>
+          <button class="tl-cell sev-2"><span class="tl-icon">🌧️</span><span>51°</span><span class="tl-time">3 PM</span></button>
+          <button class="tl-cell sev-1"><span class="tl-icon">🌦️</span><span>52°</span><span class="tl-time">3 PM</span></button>
+          <button class="tl-cell"><span class="tl-icon">⛅</span><span>52°</span><span class="tl-time">4 PM</span></button>
+        </div>
+        <ul class="alerts">
+          <li class="sev-2">🌧️ Rain 95 mi – 130 mi (2:45 PM – 3:10 PM) · 0.2 in/h, gusts 38 mph</li>
+        </ul>
+        <div class="dest-now"><span class="big">⛅</span><div><b>52°</b><small>Partly cloudy when you arrive (today 4:28 PM)</small><small>Feels 49° · wind 9 mph · 20% precip</small></div></div>
+      </div>
+    </div>
+
+    <!-- Simpler -->
+    <div>
+      <div class="col-head"><b>Simpler</b><span><strong id="count-simple"></strong> words</span></div>
+      <div class="card count" id="simple">
+        <div class="hero"><b>4:28 PM</b><span>3 h 39 m · 183 mi</span></div>
+        <div class="sky" id="sky"></div>
+        <div class="leave">
+          <span class="pill" id="leave-label">Now</span>
+          <input type="range" id="leave" min="0" max="6" step="0.5" value="0" aria-label="Leave time">
+          <button class="use" id="use">Use</button>
+        </div>
+        <div class="routes" id="routes"></div>
+        <div class="dest"><span class="em">⛅</span><b>52°</b><span>Portland</span></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    document.querySelectorAll('#themes button').forEach((b) => b.addEventListener('click', () => {
+      document.documentElement.dataset.theme = b.dataset.theme;
+      document.querySelectorAll('#themes button').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
+    }));
+
+    // A rain band drifting south; stretch k is reached k*0.6 h after leaving.
+    const ICON = ['🌤️', '🌦️', '🌧️', '⛈️'];
+    const sevAt = (k, leave) => { const d = Math.abs(k - (1.2 + (leave + k * 0.6) * 0.9)); return d < 0.6 ? 3 : d < 1.2 ? 2 : d < 2 ? 1 : 0; };
+    const trip = (leave) => Array.from({ length: 8 }, (_, k) => sevAt(k, leave));
+    const rough = (t) => t.reduce((a, s) => a + s * s, 0);
+    const color = (s) => (s === 0 ? 'var(--route-good)' : `var(--sev-${s})`);
+    const clock = (h) => new Date(2026, 10, 6, 12, 50 + Math.round(h * 60)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+    let placed = 0;
+    function render() {
+      const ghostAt = Number($('leave').value);
+      const now = trip(placed);
+      const ghost = trip(ghostAt);
+      const showGhost = ghostAt !== placed;
+      const better = rough(ghost) < rough(now) - 1;
+      const worse = rough(ghost) > rough(now) + 1;
+      document.documentElement.style.setProperty('--holo', better ? 'var(--route-good)' : worse ? 'var(--sev-3)' : 'var(--fg-soft)');
+      const w = 100 / now.length;
+      $('sky').innerHTML = '<div class="base"></div>' + now.map((s, k) => {
+        const left = `calc(${k * w}% + 2px)`;
+        const width = `calc(${w}% - 4px)`;
+        return `<div class="tower sev${s}" data-k="${k}" style="left:${left};width:${width};height:${32 + s * 26}px;--c:${color(s)}"><span>${ICON[s]}</span></div>`
+          + (showGhost ? `<div class="ghost" style="left:${left};width:${width};height:${32 + ghost[k] * 26}px"></div>` : '');
+      }).join('');
+      $('leave-label').textContent = ghostAt === 0 ? 'Now' : clock(ghostAt);
+      $('use').classList.toggle('show', showGhost);
+      count();
+    }
+    $('leave').addEventListener('input', render);
+    $('use').addEventListener('click', () => { placed = Number($('leave').value); render(); });
+
+    // Tap a tower: one line about that stretch.
+    $('sky').addEventListener('click', (e) => {
+      const t = e.target.closest('.tower');
+      document.querySelectorAll('.tip').forEach((x) => x.remove());
+      if (!t) return;
+      const s = Number(t.className.match(/sev(\d)/)[1]);
+      const k = Number(t.dataset.k);
+      const label = ['Clear', 'Light rain', 'Rain, 0.2 in/h', 'Heavy rain, gusts 38'][s];
+      const tip = document.createElement('div');
+      tip.className = 'tip';
+      tip.textContent = `${label} · mile ${k * 25} · ${clock(placed + k * 0.6)}`;
+      tip.style.left = `${t.offsetLeft + t.offsetWidth / 2}px`;
+      tip.style.top = `${t.offsetTop - 6}px`;
+      $('sky').append(tip);
+    });
+
+    // Route choices: road-sign shape = worst weather on the route.
+    const SIGN = [
+      '<circle cx="11" cy="11" r="9"/>',
+      '<rect x="2" y="4" width="18" height="14" rx="3"/>',
+      '<path d="M11 1 L21 11 L11 21 L1 11 Z"/>',
+      '<path d="M7 1 H15 L21 7 V15 L15 21 H7 L1 15 V7 Z"/>',
+    ];
+    const ROUTES = [['I-5', '3 h 39', 2, true], ['US-101', '+1 h 14', 1, false]];
+    $('routes').innerHTML = ROUTES.map(([name, time, sev, on]) => `<button class="route${on ? ' on' : ''}"><svg class="sign" viewBox="0 0 22 22" style="stroke:${color(sev)}">${SIGN[sev]}</svg><span>${name}<small>${time}</small></span></button>`).join('');
+    $('routes').addEventListener('click', (e) => {
+      const b = e.target.closest('.route');
+      if (!b) return;
+      document.querySelectorAll('.route').forEach((x) => x.classList.toggle('on', x === b));
+    });
+
+    // Words a driver has to read in each panel.
+    function words(el) { return (el.innerText.match(/[A-Za-z]{2,}/g) || []).length; }
+    function count() {
+      $('count-now').textContent = words($('now'));
+      $('count-simple').textContent = words($('simple'));
+    }
+    render();
+  </script>
+</body>
+</html>

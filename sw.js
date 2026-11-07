@@ -2,7 +2,7 @@
 // so it opens instantly from the home screen even on a weak connection.
 // Bump VERSION when the list of files changes.
 
-const VERSION = 'v4';
+const VERSION = 'v5';
 const SHELL = [
   './',
   'index.html',

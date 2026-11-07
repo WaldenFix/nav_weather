@@ -87,11 +87,10 @@
   --nav-fade: rgba(0, 0, 0, 0.97);
   --shadow: 0 0 0 1px #2a1608, 0 12px 40px -8px rgba(0, 0, 0, 0.8);
   --shadow-float: 0 0 0 1px #2a1608, 0 4px 14px rgba(0, 0, 0, 0.6);
-  --glow: 0 0 12px rgba(255, 122, 26, 0.55);
-  --glow-text: 0 0 8px rgba(255, 122, 26, 0.5);
-  --glow-strong: 0 0 22px rgba(255, 74, 0, 0.7);
   /* Tint colour emoji amber so nothing blue or white breaks night vision. */
   --emoji-filter: grayscale(1) sepia(1) saturate(4) hue-rotate(-12deg) brightness(0.85);
+  /* Only controls glow, faintly, so the glow itself says "you can touch this". */
+  --touch-glow: 0 0 6px rgba(255, 122, 26, 0.45);
   color-scheme: dark;
 }
 
@@ -158,6 +157,7 @@ button { font: inherit; cursor: pointer; }
 .panel-head p { margin: 1px 0 0; font-size: 12px; color: var(--fg-soft); }
 
 .mode-tabs { margin: 0 20px 12px; }
+.mode-tabs button { font: 600 11px var(--num); letter-spacing: 0.14em; text-transform: uppercase; }
 
 .panel-body {
   padding: 4px 20px 20px;
@@ -170,6 +170,9 @@ button { font: inherit; cursor: pointer; }
 .panel-body > * { margin-top: 0; margin-bottom: 0; }
 
 .panel-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 12px 20px 16px;
   border-top: 1px solid var(--border);
   background: var(--bg);
@@ -203,7 +206,19 @@ h2::after {
 #results > *, #road-section > * { margin-top: 0; margin-bottom: 0; }
 #results > h2 { margin-top: 8px; }
 
-#route-form { display: flex; flex-direction: column; gap: 16px; }
+#route-form { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+
+/* The form slides up out of the way once a route is planned. */
+.form-wrap { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 0.35s ease, opacity 0.25s ease, margin 0.35s ease; }
+.form-wrap.folded { grid-template-rows: 0fr; opacity: 0; margin-bottom: -16px; pointer-events: none; }
+.form-wrap.folded > form, .form-wrap.moving > form { overflow: hidden; }
+@media (prefers-reduced-motion: reduce) { .form-wrap { transition: none; } }
+
+.trip-line { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: none; color: var(--fg); font: 600 12px var(--num); letter-spacing: 0.14em; text-transform: uppercase; text-align: left; }
+.trip-line span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trip-line #trip-to { flex: 1; }
+.trip-line .i { width: 13px; height: 13px; color: var(--fg-soft); }
+.trip-line > .i:first-of-type { transform: rotate(90deg); }
 
 /* ---------- Trip card (From / Via / To) ---------- */
 .trip-card {
@@ -300,43 +315,6 @@ input[type="text"] {
 .icon-btn.ghost { background: none; }
 .panel-head .icon-btn { transition: transform 0.2s; }
 
-/* ---------- Departure ---------- */
-.depart { display: flex; flex-direction: column; gap: 8px; }
-
-.depart-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--fg-soft);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.depart-row .i { width: 16px; height: 16px; }
-.depart-row label { flex: 1; }
-
-.pill {
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent-text);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-input[type="range"] {
-  width: 100%;
-  margin: 0;
-  accent-color: var(--accent);
-}
-
-.ticks {
-  display: flex;
-  justify-content: space-between;
-  font-size: 10px;
-  color: var(--fg-soft);
-}
-
 /* ---------- Buttons ---------- */
 .primary {
   display: flex;
@@ -393,76 +371,84 @@ input[type="range"] {
 
 .status.error { color: var(--sev-3); }
 
-/* ---------- Results ---------- */
-.summary {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+/* ---------- Results: instrument-style trip readout ---------- */
+:root { --num: "Bahnschrift", "DIN Alternate", "DIN Condensed", system-ui, sans-serif; }
+.num { font-family: var(--num); font-variant-numeric: tabular-nums; }
+.tiny { display: block; font: 600 9px var(--num); letter-spacing: 0.24em; text-transform: uppercase; color: var(--fg-soft); }
+
+.cl-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.cl-arrive { display: block; font: 300 44px/1 var(--num); font-variant-numeric: tabular-nums; }
+.cl-arrive small { margin-left: 4px; font-size: 15px; font-weight: 400; letter-spacing: 0.1em; color: var(--fg-soft); }
+.cl-side { display: flex; flex-direction: column; gap: 6px; text-align: right; font: 400 15px var(--num); font-variant-numeric: tabular-nums; }
+.cl-side span { margin-left: 3px; font-size: 11px; letter-spacing: 0.12em; color: var(--fg-soft); }
+.cl-side sup { margin-left: 2px; font-size: 10px; color: var(--accent-text); }
+
+/* One column per stretch of road; lit segments = how rough. Segment and gap
+   sizes are snapped to whole screen pixels in app.js so every gap matches. */
+.cl-bars { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; align-items: end; cursor: pointer; }
+.cl-bar { position: relative; height: 100%; display: flex; flex-direction: column-reverse; gap: var(--gap, 2px); }
+.cl-bar i { display: block; flex: none; height: var(--seg, 5px); background: var(--c); opacity: 0.8; }
+.cl-bar.calm i { opacity: 0.36; }
+.cl-bar .peak { position: absolute; left: -1px; right: -1px; height: 2px; background: var(--fg); }
+.cl-bar.sel::after { content: ""; position: absolute; left: 50%; bottom: -8px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--fg); }
+.cl-read { min-height: 14px; margin-top: 4px; font: 500 11px var(--num); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-soft); }
+.cl-read b { color: var(--fg); font-weight: 600; }
+
+/* Departure: hairline tick scale with a needle. Dragging shows a ghost; Set keeps it. */
+.cl-leave { display: flex; align-items: center; gap: 12px; }
+.cl-t { min-width: 72px; font-size: 14px; }
+.cl-scale { position: relative; flex: 1; height: 22px; }
+.cl-scale::before { content: ""; position: absolute; left: 0; right: 0; top: 4px; height: 6px; background: repeating-linear-gradient(90deg, var(--border) 0 1px, transparent 1px calc(100% / 24)); }
+.cl-scale::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 10px; background: repeating-linear-gradient(90deg, var(--fg-soft) 0 1px, transparent 1px calc(100% / 3)); opacity: 0.6; }
+.cl-scale input { position: absolute; inset: -6px 0; width: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.cl-needle { position: absolute; top: -3px; width: 2px; height: 20px; margin-left: -1px; border-radius: 1px; background: var(--accent); box-shadow: var(--touch-glow, none); pointer-events: none; }
+.cl-best { position: absolute; top: 14px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: var(--route-good); pointer-events: none; }
+.cl-set { border: none; background: none; padding: 4px 0; color: var(--accent-text); font: 600 11px var(--num); letter-spacing: 0.16em; text-transform: uppercase; }
+
+/* Routes: the sign shape is each route's worst weather; a thin light marks the chosen one. */
+.cl-routes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cl-route { position: relative; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 14px; border: 1px solid var(--border); border-radius: 12px; background: none; color: var(--fg); text-align: left; min-width: 0; }
+.cl-route::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px; border-radius: 1px; }
+.cl-route.on { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
+.cl-route.on::before { background: var(--accent); box-shadow: var(--touch-glow, none); }
+.cl-route svg { width: 18px; height: 18px; flex: none; overflow: visible; }
+.cl-route svg * { fill: none; stroke-width: 2.2; stroke-linejoin: round; }
+.cl-route div { min-width: 0; }
+.cl-route b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 13px var(--num); letter-spacing: 0.06em; }
+.cl-route span { font: 400 12px var(--num); color: var(--fg-soft); }
+
+.cl-dest { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 0; border: none; background: none; color: var(--fg); text-align: left; }
+.cl-dest b { font-size: 24px; font-weight: 300; }
+.cl-dest span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 10px var(--num); letter-spacing: 0.22em; text-transform: uppercase; color: var(--fg-soft); }
+.cl-go { display: flex; align-items: center; justify-content: center; gap: 10px; min-width: 132px; padding: 15px 28px; border: none; border-radius: 14px; background: var(--accent); color: var(--accent-fg); font: 600 15px var(--num); letter-spacing: 0.2em; text-transform: uppercase; }
+
+/* After "Get route" the footer slides up with a big Go. Go slides the panel away. */
+.panel-foot.enter { animation: foot-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.panel-foot.enter .cl-go { animation: go-in 0.55s cubic-bezier(0.3, 1.4, 0.5, 1); }
+@keyframes foot-in { from { transform: translateY(100%); opacity: 0; } }
+@keyframes go-in { from { transform: scale(0.6); opacity: 0; } }
+.panel { transition: transform 0.35s cubic-bezier(0.5, 0, 0.8, 0.4), opacity 0.35s; }
+.panel.leaving { transform: translateY(calc(100vh)); opacity: 0; }
+.panel.returning { animation: panel-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes panel-in { from { transform: translateY(60vh); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .panel, .panel-foot.enter, .panel-foot.enter .cl-go, .panel.returning { transition: none; animation: none; }
 }
+.cl-go { box-shadow: var(--touch-glow, none); }
+.cl-go .i { width: 16px; height: 16px; }
+.cl-set { text-shadow: var(--touch-glow, none); }
 
-.summary div {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: var(--bg-soft);
-}
+/* Phone sheet handle = the trip's weather strip. */
+.handle-strip { display: none; width: 72px; height: 4px; margin: 10px auto 0; border-radius: 2px; overflow: hidden; background: var(--border); }
+.handle-strip i { flex: 1; }
 
-.summary span { font-size: 11px; font-weight: 500; color: var(--fg-soft); }
-.summary b { font-size: 18px; text-shadow: var(--glow-text); }
-
-.best-time {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: var(--accent-soft);
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.best-time button {
-  flex: none;
-  margin-left: auto;
-  border: none;
-  background: none;
-  color: var(--accent-text);
-  font-weight: 600;
-  padding: 0;
-}
-
-.timeline {
-  display: flex;
-  gap: 4px;
-  overflow-x: auto;
-  padding-bottom: 2px;
-}
-
-.tl-cell {
-  flex: 1 0 40px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: 8px 0 6px;
-  border: none;
-  border-radius: 10px;
-  background: var(--bg-soft);
-  color: var(--fg);
-  font-size: 12px;
-  font-weight: 600;
-  border-bottom: 4px solid var(--sev-0);
-}
-
-.tl-cell .tl-icon { font-size: 16px; }
-.tl-cell .tl-time { color: var(--fg-soft); font-size: 10px; font-weight: 400; }
-.tl-cell.sev-1 { border-bottom-color: var(--sev-1); }
-.tl-cell.sev-2 { border-bottom-color: var(--sev-2); }
-.tl-cell.sev-3 { border-bottom-color: var(--sev-3); }
-
+/* Road-sign map markers: shown only where the weather matters. */
+.wx-sign { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.wx-sign svg { width: 24px; height: 24px; overflow: visible; }
+.wx-sign svg * { fill: var(--bg); stroke-width: 2.2; stroke-linejoin: round; }
+.wx-sign b { font: 500 12px var(--num); color: var(--fg); text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg); }
 .alerts { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.alerts:empty { display: none; }
 
 .alerts li {
   padding: 10px 12px;
@@ -476,19 +462,6 @@ input[type="range"] {
 .alerts li.sev-3 { border-left-color: var(--sev-3); }
 .alerts li.sev-1 { border-left-color: var(--sev-1); }
 .alerts li.ok { border-left-color: var(--sev-0); }
-
-.dest-now {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, var(--accent-soft), var(--bg-soft));
-}
-
-.dest-now .big { font-size: 40px; line-height: 1; }
-.dest-now b { font-size: 28px; text-shadow: var(--glow-text); }
-.dest-now small { display: block; font-size: 12px; color: var(--fg-soft); line-height: 1.4; }
 
 .hourly {
   display: flex;
@@ -513,7 +486,7 @@ input[type="range"] {
 .hourly .h-pop { color: var(--accent-text); font-size: 10px; font-weight: 500; }
 
 /* Emoji used as icons: tinted amber in the Night theme. */
-.tl-icon, .h-icon, .dest-now .big, .wx-marker .ic, .nav-alert .ic, .road-marker { filter: var(--emoji-filter); }
+.h-icon, .nav-alert .ic, .road-marker { filter: var(--emoji-filter); }
 
 /* ---------- Disclosure rows (directions, settings) ---------- */
 .disclosure {
@@ -563,52 +536,6 @@ input[type="range"] {
 
 .optional, .hint { color: var(--fg-soft); font-size: 12px; }
 .hint:empty { display: none; }
-
-/* ---------- Route options ---------- */
-.route-options { display: flex; flex-direction: column; gap: 8px; }
-
-.route-option {
-  --bar: var(--sev-0);
-  position: relative;
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 12px 14px 12px 28px;
-  border: 1.5px solid var(--border);
-  border-radius: 14px;
-  background: var(--bg);
-  color: var(--fg);
-}
-
-.route-option::before {
-  content: "";
-  position: absolute;
-  left: 12px;
-  top: 12px;
-  bottom: 12px;
-  width: 4px;
-  border-radius: 2px;
-  background: var(--bar);
-}
-
-.route-option.selected { border: 2px solid var(--accent); box-shadow: var(--glow); }
-.route-option.sev-1 { --bar: var(--sev-1); }
-.route-option.sev-2 { --bar: var(--sev-2); }
-.route-option.sev-3 { --bar: var(--sev-3); }
-.route-option .ro-title { font-size: 14px; font-weight: 600; }
-.route-option .ro-meta, .route-option .ro-wx { margin-top: 3px; font-size: 12px; color: var(--fg-soft); }
-
-.tag {
-  display: inline-block;
-  margin-left: 8px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent-text);
-  font-size: 11px;
-  font-weight: 600;
-  vertical-align: 1px;
-}
 
 /* ---------- Storm chaser ---------- */
 .chaser {
@@ -764,26 +691,6 @@ input[type="range"] {
 :root:not([data-theme="light"]) .maplibregl-ctrl-attrib { background: var(--bg); color: var(--fg-soft); }
 :root:not([data-theme="light"]) .maplibregl-ctrl-attrib a { color: var(--fg-soft); }
 
-.wx-marker {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding: 3px 8px 3px 5px;
-  border-radius: 999px;
-  background: var(--bg);
-  color: var(--fg);
-  box-shadow: var(--shadow-float);
-  font-size: 12px;
-  font-weight: 700;
-  border: 2px solid var(--sev-0);
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.wx-marker.sev-1 { border-color: var(--sev-1); }
-.wx-marker.sev-2 { border-color: var(--sev-2); }
-.wx-marker.sev-3 { border-color: var(--sev-3); }
-.wx-marker .ic { font-size: 13px; }
 
 /* Your position while navigating. */
 .me-dot {
@@ -1001,15 +908,7 @@ body.navigating .attribution-note { display: none; }
     border-radius: 24px 24px 0 0;
   }
 
-  .panel::before {
-    content: "";
-    display: block;
-    width: 40px;
-    height: 5px;
-    margin: 8px auto 0;
-    border-radius: 3px;
-    background: var(--border);
-  }
+  .handle-strip { display: flex; }
 
   .panel-head { padding: 6px 14px 10px 20px; }
   .panel-head p { display: none; }
@@ -1044,7 +943,7 @@ body.navigating .attribution-note { display: none; }
   }
   .map-controls .chip { padding: 10px; }
   .map-controls .chip span { display: none; }
-  .maplibregl-ctrl-top-right { top: calc(150px + env(safe-area-inset-top)); }
+  .maplibregl-ctrl-top-right .maplibregl-ctrl-group { display: none; }
 
   .radar-legend { bottom: auto; top: calc(64px + env(safe-area-inset-top)); left: 12px; right: auto; width: 200px; }
 

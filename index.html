@@ -53,6 +53,8 @@
   <div id="map"></div>
 
   <aside id="panel" class="panel">
+    <!-- On phones this is the sheet's handle, coloured with the trip's weather start to finish. -->
+    <div class="handle-strip" id="handle-strip" aria-hidden="true"></div>
     <header class="panel-head">
       <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
         <rect class="logo-bg" width="64" height="64" rx="14"/>
@@ -67,9 +69,9 @@
     </header>
 
     <div class="mode-tabs segmented" role="tablist" aria-label="Mode">
-      <button type="button" role="tab" data-mode="" aria-selected="true">🧭 Route</button>
-      <button type="button" role="tab" data-mode="chaser" aria-selected="false">⛈️ Chase</button>
-      <button type="button" role="tab" data-mode="watcher" aria-selected="false">🔭 Watch</button>
+      <button type="button" role="tab" data-mode="" aria-selected="true">Route</button>
+      <button type="button" role="tab" data-mode="chaser" aria-selected="false">Chase</button>
+      <button type="button" role="tab" data-mode="watcher" aria-selected="false">Watch</button>
     </div>
 
     <div class="panel-body">
@@ -99,6 +101,12 @@
         <p class="safety" data-for="coast" hidden>🌊 Storm waves run far further up the beach than you expect, and "sneaker waves" come without warning. Watch from high ground or your car, <strong>never turn your back on the ocean</strong>, and stay off jetties, rocks and driftwood logs (waves roll them). In high wind, avoid parking under trees.</p>
       </section>
 
+      <!-- Once a route is planned the form slides away, leaving this one line. Tap it to edit. -->
+      <button type="button" class="trip-line" id="trip-line" hidden aria-expanded="false">
+        <span id="trip-from"></span><svg class="i" aria-hidden="true"><use href="#i-nav"/></svg><span id="trip-to"></span>
+        <svg class="i chev" aria-hidden="true"><use href="#i-chevron"/></svg>
+      </button>
+      <div class="form-wrap" id="form-wrap">
       <form id="route-form" autocomplete="off">
         <div class="trip-card">
           <div class="stop field">
@@ -130,34 +138,37 @@
           </div>
         </div>
 
-        <div class="depart">
-          <div class="depart-row">
-            <svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>
-            <label for="depart">Leave</label>
-            <span class="pill" id="depart-label">Now</span>
-          </div>
-          <input id="depart" type="range" min="0" max="72" step="0.25" value="0">
-          <div class="ticks" aria-hidden="true"><span>Now</span><span>+24 h</span><span>+48 h</span><span>+72 h</span></div>
-        </div>
-
         <button type="submit" id="go" class="primary"><svg class="i" aria-hidden="true"><use href="#i-nav"/></svg>Get route &amp; weather</button>
       </form>
+      </div>
 
       <div id="status" class="status" hidden></div>
 
+      <!-- Trip at a glance. Most detail lives in shape: bar height is how rough each
+           stretch is, the route buttons' sign shape is their worst weather. -->
       <section id="results" hidden>
-        <h2>Your trip</h2>
-        <div class="summary" id="summary"></div>
-        <p class="hint" id="summary-note"></p>
-        <div id="intercept" class="intercept" hidden></div>
-        <div id="best-time" class="best-time" hidden></div>
+        <div class="cl-head">
+          <div><span class="tiny">Arrive</span><b class="cl-arrive" id="arrive"></b></div>
+          <div class="cl-side"><div id="drive"></div><div id="dist"></div></div>
+        </div>
 
-        <h2>Routes</h2>
-        <div class="route-options" id="route-options"></div>
+        <div class="cl-bars" id="bars" title="Tap a bar for that stretch"></div>
+        <div class="cl-read" id="read"></div>
+
+        <div class="cl-leave">
+          <label for="depart" class="cl-t num" id="depart-label">Now</label>
+          <div class="cl-scale">
+            <i class="cl-best" id="best-mark" hidden title="Calmer time to leave"></i>
+            <div class="cl-needle" id="needle"></div>
+            <input id="depart" type="range" min="0" max="72" step="0.25" value="0" aria-label="Leave time">
+          </div>
+          <button type="button" class="cl-set" id="set-depart" hidden>Set</button>
+        </div>
+
+        <div class="cl-routes" id="route-options"></div>
         <div class="hint" id="alt-status"></div>
 
-        <h2>Along the route</h2>
-        <div class="timeline" id="timeline"></div>
+        <div id="intercept" class="intercept" hidden></div>
         <ul class="alerts" id="alerts"></ul>
 
         <section id="road-section" hidden>
@@ -165,8 +176,7 @@
           <ul class="alerts" id="road-reports"></ul>
         </section>
 
-        <h2>At your destination</h2>
-        <div class="dest" id="dest"></div>
+        <div class="hourly" id="hourly" hidden></div>
 
         <details class="disclosure steps">
           <summary><svg class="i" aria-hidden="true"><use href="#i-list"/></svg><span>Turn-by-turn directions</span><svg class="i chev" aria-hidden="true"><use href="#i-chevron"/></svg></summary>
@@ -188,7 +198,8 @@
     </div>
 
     <footer class="panel-foot" id="panel-foot" hidden>
-      <button id="start-nav" class="primary"><svg class="i" aria-hidden="true"><use href="#i-nav"/></svg>Start navigation</button>
+      <button type="button" class="cl-dest" id="dest-line" title="Hourly forecast after you arrive"><b class="num" id="dest-temp"></b><span id="dest-name"></span></button>
+      <button id="start-nav" class="cl-go"><svg class="i" aria-hidden="true"><use href="#i-nav"/></svg>Go</button>
     </footer>
   </aside>
 

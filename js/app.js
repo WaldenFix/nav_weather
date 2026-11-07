@@ -68,6 +68,21 @@ const map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
 
+// Phones pinch to zoom, so the zoom/compass buttons are hidden there (CSS). Without a
+// compass there'd be no way back from a twisted or tilted map, so touch rotate and
+// tilt are off on phones too. Navigation still turns the map with your heading.
+const phone = matchMedia('(max-width: 700px)');
+function fitGestures() {
+  for (const handler of [map.dragRotate, map.touchPitch]) {
+    if (phone.matches) handler.disable();
+    else handler.enable();
+  }
+  if (phone.matches) map.touchZoomRotate.disableRotation();
+  else map.touchZoomRotate.enableRotation();
+}
+fitGestures();
+phone.addEventListener('change', fitGestures);
+
 const mapReady = new Promise((resolve) => map.on('load', resolve));
 
 mapReady.then(() => {
@@ -137,14 +152,8 @@ mapReady.then(() => {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: { 'line-color': '#1e293b', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 6, 14, 12], 'line-opacity': 0.55 },
   });
-  // Soft glow under the route, only visible in the Night theme.
-  map.addLayer({
-    id: 'route-glow',
-    type: 'line',
-    source: 'route',
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 10, 14, 22], 'line-blur': 8, 'line-opacity': 0 },
-  });
+  // Thins (to 55%) and fades further along the trip, where the forecast is less sure.
+  const taper = ['-', 1, ['*', 0.45, ['coalesce', ['get', 't'], 0]]];
   map.addLayer({
     id: 'route-line',
     type: 'line',
@@ -152,7 +161,8 @@ mapReady.then(() => {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['match', ['get', 'sev'], 0, SEV_COLORS[0], 1, SEV_COLORS[1], 2, SEV_COLORS[2], 3, SEV_COLORS[3], '#3b82f6'],
-      'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.5, 14, 8],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 5, ['*', 4, taper], 14, ['*', 9, taper]],
+      'line-opacity': ['-', 1, ['*', 0.4, ['coalesce', ['get', 't'], 0]]],
     },
   });
 
@@ -342,8 +352,6 @@ function styleRouteLayers(t) {
   const sev = [cssVar('--route-good'), cssVar('--sev-1'), cssVar('--sev-2'), cssVar('--sev-3')];
   const color = ['match', ['get', 'sev'], 0, sev[0], 1, sev[1], 2, sev[2], 3, sev[3], cssVar('--accent')];
   map.setPaintProperty('route-line', 'line-color', color);
-  map.setPaintProperty('route-glow', 'line-color', color);
-  map.setPaintProperty('route-glow', 'line-opacity', t === 'night' ? 0.55 : 0);
   map.setPaintProperty('route-casing', 'line-color', cssVar('--route-casing'));
   map.setPaintProperty('route-casing', 'line-opacity', t === 'light' ? 0.55 : 0.9);
   map.setPaintProperty('alt-line', 'line-color', cssVar('--route-alt'));
@@ -470,12 +478,32 @@ $('route-form').addEventListener('submit', (e) => {
 
 $('collapse').addEventListener('click', () => $('panel').classList.toggle('collapsed'));
 
+// After a route is planned the form slides away, leaving a one-line "From → To"
+// strip; tapping the strip slides the form back for editing.
+function foldForm(fold) {
+  const wrap = $('form-wrap');
+  if (fold === wrap.classList.contains('folded')) return;
+  $('trip-from').textContent = shortName(state.from);
+  $('trip-to').textContent = shortName(state.to);
+  $('trip-line').hidden = !fold;
+  $('trip-line').setAttribute('aria-expanded', String(!fold));
+  wrap.classList.add('moving'); // clip while it slides; the suggestion lists need overflow afterwards
+  wrap.classList.toggle('folded', fold);
+  setTimeout(() => wrap.classList.remove('moving'), 400);
+}
+$('trip-line').addEventListener('click', () => foldForm(false));
+
 // ---------------------------------------------------------------- departure time
 
+// Dragging the needle doesn't change the plan: it marks on the bars how the trip
+// would look leaving then (a ghost). "Set" makes it the plan.
 $('depart').max = MAX_DEPART_HOURS;
 $('depart').addEventListener('input', () => {
-  state.departOffset = Number($('depart').value);
   updateDepartLabel();
+  if (state.forecasts) renderBars();
+});
+$('set-depart').addEventListener('click', () => {
+  state.departOffset = Number($('depart').value);
   if (state.forecasts) render();
 });
 
@@ -483,9 +511,17 @@ function departAt() {
   return state.baseTime + state.departOffset * 3600;
 }
 
+function ghostOffset() {
+  const g = Number($('depart').value);
+  return g === state.departOffset ? null : g;
+}
+
 function updateDepartLabel() {
-  const label = state.departOffset === 0 ? 'now' : fmtDayTime(departAt());
+  const g = Number($('depart').value);
+  const label = g === 0 ? 'now' : fmtDayTime(state.baseTime + g * 3600);
   $('depart-label').textContent = label[0].toUpperCase() + label.slice(1);
+  $('needle').style.left = `${(g / MAX_DEPART_HOURS) * 100}%`;
+  $('set-depart').hidden = ghostOffset() == null;
 }
 
 // ---------------------------------------------------------------- units
@@ -580,6 +616,7 @@ async function planRoute() {
     state.roads = null;
     state.roadError = null;
     selectOption(0);
+    foldForm(true);
     fitRoute();
     loadRoadReports(token);
 
@@ -624,6 +661,7 @@ function selectOption(i) {
   const opt = state.options[i];
   if (!opt) return;
   state.selected = i;
+  state.barSel = null;
   state.route = opt.route;
   state.samples = opt.samples;
   state.forecasts = opt.forecasts;
@@ -655,14 +693,108 @@ function render() {
   renderSummary(route, pts);
   renderIntercept(pts);
   renderRoadReports(pts);
-  renderTimeline(pts);
   renderAlerts(pts);
   renderDestination(pts[pts.length - 1]);
   renderSteps(route);
   renderBestTime(t0);
   updateDepartLabel();
   $('results').hidden = false;
-  $('panel-foot').hidden = false;
+  if ($('panel-foot').hidden) {
+    // First result: the footer slides up with a big Go.
+    $('panel-foot').hidden = false;
+    $('panel-foot').classList.add('enter');
+    $('panel-foot').addEventListener('animationend', () => $('panel-foot').classList.remove('enter'), { once: true });
+  }
+  renderBars();
+}
+
+// ---------------------------------------------------------------- trip bars
+
+// The route split into ten stretches by distance; each bar's lit segments show how
+// rough its worst weather is. Segment and gap sizes are whole screen pixels, so the
+// gaps look identical at 125% / 150% display scaling too.
+const BARS = 10;
+const BAR_SEGS = [2, 5, 7, 10]; // lit segments per severity
+let barSeg = 5;
+let barGap = 2;
+
+function snapBars() {
+  const dpr = devicePixelRatio || 1;
+  barSeg = Math.round(5 * dpr) / dpr;
+  barGap = Math.max(1, Math.round(2 * dpr)) / dpr;
+  const el = $('bars');
+  el.style.setProperty('--seg', `${barSeg}px`);
+  el.style.setProperty('--gap', `${barGap}px`);
+  el.style.height = `${BARS * (barSeg + barGap) - barGap}px`;
+}
+snapBars();
+addEventListener('resize', () => { snapBars(); if (state.forecasts) renderBars(); });
+
+function sevColor(s) {
+  return s ? `var(--sev-${s})` : 'var(--route-good)';
+}
+
+// The worst point in each tenth of the route.
+function stretches(pts) {
+  const total = pts[pts.length - 1].dist || 1;
+  const sev = (p) => p.wx?.severity ?? -1;
+  return Array.from({ length: BARS }, (_, b) => {
+    const lo = (total * b) / BARS;
+    const hi = (total * (b + 1)) / BARS;
+    const mid = (lo + hi) / 2;
+    let group = pts.filter((p) => p.dist >= lo && (p.dist < hi || b === BARS - 1));
+    if (!group.length) group = [pts.reduce((a, p) => (Math.abs(p.dist - mid) < Math.abs(a.dist - mid) ? p : a))];
+    return group.reduce((a, p) => (sev(p) > sev(a) ? p : a), group[0]);
+  });
+}
+
+function renderBars() {
+  const now = stretches(alongRoute(state.samples, state.forecasts, departAt()));
+  const g = ghostOffset();
+  const ghost = g == null ? null : stretches(alongRoute(state.samples, state.forecasts, state.baseTime + g * 3600));
+  state.bars = now;
+  $('bars').innerHTML = now.map((p, k) => {
+    const s = p.wx?.severity ?? 0;
+    const peak = ghost ? `<span class="peak" style="bottom:${BAR_SEGS[ghost[k].wx?.severity ?? 0] * (barSeg + barGap) - barGap}px"></span>` : '';
+    return `<div class="cl-bar${s ? '' : ' calm'}${state.barSel === k ? ' sel' : ''}" data-k="${k}" style="--c:${sevColor(s)}">${'<i></i>'.repeat(BAR_SEGS[s])}${peak}</div>`;
+  }).join('');
+  $('handle-strip').innerHTML = now.map((p) => `<i style="background:${sevColor(p.wx?.severity ?? 0)}"></i>`).join('');
+
+  const read = $('read');
+  const sel = state.barSel != null ? now[state.barSel] : null;
+  if (sel) {
+    const b = document.createElement('b');
+    b.textContent = sel.wx ? sel.wx.label : 'Beyond forecast';
+    read.replaceChildren(b, ` · ${fmtDist(sel.dist)} · ${fmtTime(sel.eta)}${sel.wx ? ` · ${fmtTemp(sel.wx.temp)}` : ''}`);
+  } else {
+    read.textContent = ghost ? `Marks show leaving ${fmtTime(state.baseTime + g * 3600)}` : '';
+  }
+}
+
+$('bars').addEventListener('click', (e) => {
+  const bar = e.target.closest('.cl-bar');
+  const k = bar ? Number(bar.dataset.k) : null;
+  state.barSel = k === state.barSel ? null : k;
+  const p = state.barSel != null ? state.bars[state.barSel] : null;
+  if (p) map.easeTo({ center: [p.lon, p.lat], zoom: Math.max(map.getZoom(), 8), duration: 600 });
+  renderBars();
+});
+
+function hoursMinutes(s) {
+  const h = Math.floor(s / 3600);
+  const m = Math.round((s % 3600) / 60);
+  return `${h}:${String(m).padStart(2, '0')}`;
+}
+
+// Road-sign shapes: circle calm, rectangle minor, diamond caution, octagon hazardous.
+const SIGNS = [
+  '<circle cx="13" cy="13" r="11"/>',
+  '<rect x="2" y="5" width="22" height="16" rx="4"/>',
+  '<path d="M13 1 L25 13 L13 25 L1 13 Z"/>',
+  '<path d="M8.5 1 H17.5 L25 8.5 V17.5 L17.5 25 H8.5 L1 17.5 V8.5 Z"/>',
+];
+function signSvg(sev) {
+  return `<svg viewBox="0 0 26 26" aria-hidden="true" style="stroke:${sevColor(sev)}">${SIGNS[sev]}</svg>`;
 }
 
 function drawAlternatives() {
@@ -694,40 +826,24 @@ function renderOptions(t0) {
   const calmest = stats.reduce((best, s, i) => (s.score < stats[best].score ? i : best), 0);
   const stormiest = stats.reduce((best, s, i) => (s.storms > stats[best].storms ? i : best), 0);
 
+  // Compact buttons: road name, time (the others as "+h:mm" over the fastest), and the
+  // sign shape of the route's worst weather. The full story is in the tooltip.
   $('route-options').replaceChildren(...state.options.map((o, i) => {
     const s = stats[i];
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = `route-option sev-${s.worst}${i === state.selected ? ' selected' : ''}`;
-
-    const title = document.createElement('div');
-    title.className = 'ro-title';
-    title.textContent = o.route.roads.length ? `via ${o.route.roads.join(', ')}` : `Route ${i + 1}`;
-    const tags = [];
-    if (state.options.length > 1 && i === fastest) tags.push('Fastest');
-    if (state.options.length > 1 && i === calmest && stats[calmest].score < stats[fastest].score - 0.5 && !state.chaser) tags.push('Calmest');
-    if (state.chaser && stats[stormiest].storms > 0 && i === stormiest) tags.push('Most storms');
-    for (const t of tags) {
-      const tag = document.createElement('span');
-      tag.className = 'tag';
-      tag.textContent = t;
-      title.append(tag);
-    }
-
-    const meta = document.createElement('div');
-    meta.className = 'ro-meta';
+    btn.className = `cl-route${i === state.selected ? ' on' : ''}`;
     const extra = s.time - stats[fastest].time;
-    meta.textContent = `${fmtDist(o.route.distance)} · ${fmtDuration(s.time)}${extra > 120 ? ` (+${fmtDuration(extra)})` : ''}`
-      + (s.delay >= 300 ? ` · incl. ${fmtDuration(s.delay)} for weather` : '');
-
-    const wx = document.createElement('div');
-    wx.className = 'ro-wx';
-    wx.textContent = s.rough
-      ? `⚠️ ${s.rough} rough stretch${s.rough > 1 ? 'es' : ''} · worst: ${SEVERITY_LABEL[s.worst].toLowerCase()}`
-      : s.wet ? '🌦️ Some light weather' : '👍 Good driving weather';
-    if (s.storms) wx.textContent += ` · ⛈️ ${s.storms} storm point${s.storms > 1 ? 's' : ''}`;
-
-    btn.append(title, meta, wx);
+    const tags = [];
+    if (state.options.length > 1 && i === fastest) tags.push('fastest');
+    if (state.options.length > 1 && i === calmest && stats[calmest].score < stats[fastest].score - 0.5 && !state.chaser) tags.push('calmest');
+    if (state.chaser && stats[stormiest].storms > 0 && i === stormiest) tags.push('most storms');
+    btn.title = `${o.route.roads.length ? `via ${o.route.roads.join(', ')}` : `Route ${i + 1}`}${tags.length ? ` (${tags.join(', ')})` : ''}`
+      + ` · ${fmtDist(o.route.distance)} · ${fmtDuration(s.time)} · worst weather: ${SEVERITY_LABEL[s.worst].toLowerCase()}`
+      + (s.storms ? ` · ${s.storms} storm point${s.storms > 1 ? 's' : ''}` : '');
+    btn.innerHTML = `${signSvg(s.worst)}<div><b></b><span></span></div>`;
+    btn.querySelector('b').textContent = o.route.roads[0] ?? `Route ${i + 1}`;
+    btn.querySelector('span').textContent = i !== fastest && extra >= 120 ? `+${hoursMinutes(extra)}` : hoursMinutes(s.time);
     btn.addEventListener('click', () => selectOption(i));
     return btn;
   }));
@@ -851,37 +967,51 @@ function roughStretches(sevs) {
   return count;
 }
 
+// Each piece carries its severity and how far along the trip it is (t, 0–1): the line
+// thins and fades further out, where the forecast is less certain.
 function colorRoute(pts) {
   const features = [];
+  const total = pts[pts.length - 1].dist || 1;
   for (let k = 0; k < pts.length - 1; k++) {
     const a = pts[k];
     const b = pts[k + 1];
     const sev = Math.max(a.wx?.severity ?? -1, b.wx?.severity ?? -1);
     features.push({
       type: 'Feature',
-      properties: { sev },
+      properties: { sev, t: a.dist / total },
       geometry: { type: 'LineString', coordinates: state.route.coords.slice(a.index, b.index + 1) },
     });
   }
   map.getSource('route').setData({ type: 'FeatureCollection', features });
 }
 
+// One road-sign marker per stretch of rough weather, at its worst point.
+// Calm stretches get no marker, so the map stays clean.
 function drawWeatherMarkers(pts) {
   state.markers.forEach((m) => m.remove());
   state.markers = [];
-  // Keep the map readable: at most ~14 bubbles, always including the destination.
-  const every = Math.max(1, Math.ceil(pts.length / 14));
-  pts.forEach((p, i) => {
-    if (!p.wx || (i % every !== 0 && i !== pts.length - 1)) return;
+  const runs = [];
+  let run = null;
+  for (const p of pts) {
+    if (p.wx && p.wx.severity >= 1) {
+      if (!run) runs.push(run = []);
+      run.push(p);
+    } else {
+      run = null;
+    }
+  }
+  for (const r of runs) {
+    const p = r.reduce((a, q) => (q.wx.severity > a.wx.severity ? q : a));
     const el = document.createElement('div');
-    el.className = `wx-marker sev-${p.wx.severity}`;
-    const ic = document.createElement('span');
-    ic.className = 'ic';
-    ic.textContent = p.wx.icon;
-    el.append(ic, fmtTemp(p.wx.temp));
+    el.className = 'wx-sign';
+    el.innerHTML = signSvg(p.wx.severity);
+    const temp = document.createElement('b');
+    temp.textContent = fmtTemp(p.wx.temp);
+    el.append(temp);
+    el.title = `${p.wx.label} · ${SEVERITY_LABEL[p.wx.severity]}`;
     const popup = new maplibregl.Popup({ offset: 14 }).setDOMContent(detailCard(p));
-    state.markers.push(new maplibregl.Marker({ element: el }).setLngLat([p.lon, p.lat]).setPopup(popup).addTo(map));
-  });
+    state.markers.push(new maplibregl.Marker({ element: el, anchor: 'left', offset: [-12, 0] }).setLngLat([p.lon, p.lat]).setPopup(popup).addTo(map));
+  }
 }
 
 function detailCard(p) {
@@ -907,79 +1037,32 @@ function card(lines) {
   return div;
 }
 
-// Drive time and arrival include the weather slow-down; the label says how much.
+// Arrival time large; drive time and distance small beside it. A small "+7" on the
+// drive time is the minutes added for weather.
 function renderSummary(route, pts) {
   const last = pts[pts.length - 1];
-  const items = [
-    ['Distance', fmtDist(route.distance)],
-    ['Drive', fmtDuration(last.eta - pts[0].eta).replace(' min', ' m')],
-    ['Arrive', fmtTime(last.eta)],
-  ];
-  $('summary').replaceChildren(...items.map(([l, v]) => {
-    const d = document.createElement('div');
-    const s = document.createElement('span');
-    s.textContent = l;
-    const b = document.createElement('b');
-    b.textContent = v;
-    d.append(s, b);
-    return d;
-  }));
-  $('summary-note').textContent = last.delay >= 60 ? `Includes ${fmtDuration(last.delay)} of weather slow-downs` : '';
-}
-
-function renderTimeline(pts) {
-  $('timeline').replaceChildren(...pts.map((p) => {
-    const cell = document.createElement('button');
-    cell.type = 'button';
-    cell.className = `tl-cell sev-${p.wx?.severity ?? 0}`;
-    cell.title = p.wx ? `${p.wx.label}, ${fmtTemp(p.wx.temp)} at ${fmtTime(p.eta)}` : 'Beyond forecast range';
-    const icon = document.createElement('span');
-    icon.className = 'tl-icon';
-    icon.textContent = p.wx?.icon ?? '–';
-    const temp = document.createElement('span');
-    temp.textContent = p.wx ? fmtTemp(p.wx.temp) : '';
-    const time = document.createElement('span');
-    time.className = 'tl-time';
-    time.textContent = fmtTime(p.eta, true);
-    cell.append(icon, temp, time);
-    cell.addEventListener('click', () => {
-      map.flyTo({ center: [p.lon, p.lat], zoom: Math.max(map.getZoom(), 9) });
-      if (p.wx) new maplibregl.Popup({ offset: 14 }).setLngLat([p.lon, p.lat]).setDOMContent(detailCard(p)).addTo(map);
-    });
-    return cell;
-  }));
-}
-
-// Collapse consecutive bad-weather samples into stretches, e.g. "Rain from 40–65 mi".
-function renderAlerts(pts) {
-  const items = [];
-  let run = null;
-  const flush = () => { if (run) items.push(run); run = null; };
-  for (const p of pts) {
-    if (p.wx && p.wx.severity >= 1) {
-      if (!run) run = { start: p, end: p, worst: p };
-      run.end = p;
-      if (p.wx.severity > run.worst.wx.severity || (p.wx.severity === run.worst.wx.severity && p.wx.precip > run.worst.wx.precip)) run.worst = p;
-    } else {
-      flush();
-    }
+  const arrive = fmtTime(last.eta).match(/^(.*?)\s?([AaPp]\.?[Mm]\.?)$/);
+  $('arrive').replaceChildren(arrive ? arrive[1] : fmtTime(last.eta));
+  if (arrive) {
+    const small = document.createElement('small');
+    small.textContent = arrive[2];
+    $('arrive').append(small);
   }
-  flush();
+  const unit = (text) => { const s = document.createElement('span'); s.textContent = text; return s; };
+  $('drive').replaceChildren(hoursMinutes(last.eta - pts[0].eta), unit('H'));
+  if (last.delay >= 300) {
+    const sup = document.createElement('sup');
+    sup.textContent = `+${Math.round(last.delay / 60)}`;
+    sup.title = `Includes ${fmtDuration(last.delay)} for weather`;
+    $('drive').append(sup);
+  }
+  const [num, u] = splitDist(fmtDist(route.distance));
+  $('dist').replaceChildren(num, unit(u.toUpperCase()));
+}
 
-  const lis = items.map(({ start, end, worst }) => {
-    const li = document.createElement('li');
-    li.className = `sev-${worst.wx.severity}`;
-    const at = (p) => (p.dist < 100 ? 'the start' : fmtDist(p.dist));
-    const where = start === end ? `around ${at(start)}` : `${start.dist < 100 ? 'from the start to' : `${fmtDist(start.dist)} –`} ${fmtDist(end.dist)}`;
-    const when = start === end ? fmtTime(start.eta) : `${fmtTime(start.eta)} – ${fmtTime(end.eta)}`;
-    const extra = [];
-    if (worst.wx.precip >= 0.1) extra.push(`${fmtPrecip(worst.wx.precip)}/h`);
-    if (worst.wx.gusts >= 45) extra.push(`gusts ${fmtSpeed(worst.wx.gusts)}`);
-    if (worst.wx.visibility < 1000) extra.push(`visibility ${fmtDist(worst.wx.visibility)}`);
-    li.textContent = `${worst.wx.icon} ${worst.wx.label} ${where} (${when})${extra.length ? ` · ${extra.join(', ')}` : ''}`;
-    return li;
-  });
-
+// Only what the bars can't show: possible ice, and a forecast that runs out.
+function renderAlerts(pts) {
+  const lis = [];
   const icy = pts.find((p) => p.wx && p.wx.temp <= 1 && (p.wx.precip > 0 || p.wx.snowfall > 0));
   if (icy) {
     const li = document.createElement('li');
@@ -996,42 +1079,23 @@ function renderAlerts(pts) {
     lis.push(li);
   }
 
-  if (!lis.length) {
-    const li = document.createElement('li');
-    li.className = 'ok';
-    li.textContent = '👍 No significant weather expected along the way.';
-    lis.push(li);
-  }
   $('alerts').replaceChildren(...lis);
 }
 
+// Footer: destination temperature and name; tap for the hours after you arrive.
 function renderDestination(last) {
-  const box = $('dest');
-  box.replaceChildren();
-  if (!last.wx) {
-    box.textContent = 'Arrival is beyond the forecast range.';
-    return;
-  }
   const w = last.wx;
-  const now = document.createElement('div');
-  now.className = 'dest-now';
-  const big = document.createElement('span');
-  big.className = 'big';
-  big.textContent = w.icon;
-  const info = document.createElement('div');
-  const temp = document.createElement('b');
-  temp.textContent = fmtTemp(w.temp);
-  const desc = document.createElement('small');
-  desc.textContent = `${w.label} when you arrive (${fmtDayTime(last.eta)})`;
-  const more = document.createElement('small');
-  more.textContent = `Feels ${fmtTemp(w.feels)} · wind ${fmtSpeed(w.wind)} · ${Math.round(w.pop ?? 0)}% precip`;
-  info.append(temp, desc, more);
-  now.append(big, info);
+  $('dest-temp').textContent = w ? fmtTemp(w.temp) : '–';
+  $('dest-name').textContent = shortName(state.to);
+  $('dest-line').title = w
+    ? `${w.label} when you arrive (${fmtDayTime(last.eta)}) · feels ${fmtTemp(w.feels)} · wind ${fmtSpeed(w.wind)} · ${Math.round(w.pop ?? 0)}% precip`
+    : 'Arrival is beyond the forecast range';
 
   // The 12 hours after arrival, hour by hour.
   const series = state.forecasts[state.forecasts.length - 1];
-  const hourly = document.createElement('div');
-  hourly.className = 'hourly';
+  const hourly = $('hourly');
+  hourly.replaceChildren();
+  if (!w) return;
   const startHour = Math.ceil(last.eta / 3600) * 3600;
   for (let h = 0; h < 12; h++) {
     const t = startHour + h * 3600;
@@ -1052,8 +1116,12 @@ function renderDestination(last) {
     cell.title = c.label;
     hourly.append(cell);
   }
-  box.append(now, hourly);
 }
+
+$('dest-line').addEventListener('click', () => {
+  $('hourly').hidden = !$('hourly').hidden || !$('hourly').childElementCount;
+  if (!$('hourly').hidden) $('hourly').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+});
 
 function renderSteps(route) {
   $('steps').replaceChildren(...route.steps.map((s) => {
@@ -1070,8 +1138,9 @@ function renderSteps(route) {
 
 // Scan departure times in the window and suggest one if it's clearly better.
 // Not useful when you're trying to drive *into* weather, so off in chaser mode.
+// A small dot on the departure scale marks a clearly calmer time to leave.
 function renderBestTime(t0) {
-  const el = $('best-time');
+  const el = $('best-mark');
   if (state.chaser || state.watcher) {
     el.hidden = true;
     return;
@@ -1087,17 +1156,8 @@ function renderBestTime(t0) {
     return;
   }
   el.hidden = false;
-  const text = document.createElement('span');
-  text.textContent = `💡 Leaving ${fmtDayTime(state.baseTime + best.offset * 3600)} looks like a calmer drive.`;
-  el.replaceChildren(text);
-  const btn = document.createElement('button');
-  btn.textContent = 'Use';
-  btn.addEventListener('click', () => {
-    state.departOffset = best.offset;
-    $('depart').value = best.offset;
-    render();
-  });
-  el.append(btn);
+  el.style.left = `${(best.offset / MAX_DEPART_HOURS) * 100}%`;
+  el.title = `Leaving ${fmtDayTime(state.baseTime + best.offset * 3600)} looks calmer`;
 }
 
 // ---------------------------------------------------------------- storm chaser
@@ -1516,7 +1576,13 @@ function startNavigation() {
   state.planToken++;
   render();
 
-  document.body.classList.add('navigating');
+  // The panel slides down out of the way, then the driving view takes over.
+  $('panel').classList.add('leaving');
+  setTimeout(() => {
+    if (!state.nav) return;
+    document.body.classList.add('navigating');
+    $('panel').classList.remove('leaving');
+  }, 350);
   $('nav-ui').hidden = false;
   $('nav-dist').textContent = '';
   $('nav-dist-unit').textContent = '';
@@ -1737,6 +1803,9 @@ function stopNavigation() {
   state.meMarker?.remove();
   state.meMarker = null;
   document.body.classList.remove('navigating');
+  $('panel').classList.remove('leaving');
+  $('panel').classList.add('returning');
+  $('panel').addEventListener('animationend', () => $('panel').classList.remove('returning'), { once: true });
   $('nav-ui').hidden = true;
   applyTheme();
   map.easeTo({ pitch: 0, bearing: 0 });

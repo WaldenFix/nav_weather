@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en" data-theme="night">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Cluster Panel</title>
+  <!-- Prototype: the simpler panel over the map, with a light automotive
+       instrument feel (hairline scales, segmented bars, indicator lights).
+       Most detail is carried by shape rather than words. Sample data only. -->
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    :root { --num: "Bahnschrift", "DIN Alternate", "DIN Condensed", system-ui, sans-serif; }
+    :root { --water: #c9dcea; --land: #e7ecef; --road: #ffffff; }
+    :root[data-theme="dark"] { --water: #1c2630; --land: #15120f; --road: #2e2822; }
+    :root[data-theme="night"] { --water: #140b05; --land: #000000; --road: #2a1608; }
+    html, body { height: 100%; overflow: hidden; }
+
+    /* ---------- Map ---------- */
+    .map { position: fixed; inset: 0; background: var(--land); }
+    .map svg { width: 100%; height: 100%; display: block; }
+    .water { fill: var(--water); }
+    .roads { fill: none; stroke: var(--road); stroke-width: 1.5; }
+    .roads.major { stroke-width: 3; }
+    .route { fill: none; stroke-linecap: round; }
+    :root[data-theme="night"] .route { filter: drop-shadow(0 0 4px var(--accent)); }
+    .place { font: 600 9px var(--num); letter-spacing: .2em; fill: var(--fg-soft); opacity: .7; }
+
+    /* Road-sign markers only where the weather matters; calm stretches stay clean. */
+    .sign { position: absolute; transform: translate(-50%, -50%); display: flex; align-items: center; gap: 4px; }
+    .sign svg { width: 26px; height: 26px; overflow: visible; }
+    .sign svg * { fill: var(--bg); stroke-width: 2.2; stroke-linejoin: round; }
+    .sign b { font: 500 12px var(--num); color: var(--fg); text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg); }
+
+    /* ---------- Map buttons that are also readouts ---------- */
+    .gauges { position: fixed; top: calc(14px + env(safe-area-inset-top)); right: 14px; display: flex; flex-direction: column; gap: 8px; z-index: 2; }
+    .gauge-btn { width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg); display: grid; place-items: center; box-shadow: var(--shadow-float); padding: 0; }
+    .gauge-btn svg { width: 22px; height: 22px; overflow: visible; }
+    .mode { position: fixed; top: calc(14px + env(safe-area-inset-top)); left: 14px; z-index: 2; display: flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--bg); box-shadow: var(--shadow-float); }
+    .mode button { border: none; background: none; padding: 7px 12px; border-radius: 9px; color: var(--fg-soft); font: 600 11px var(--num); letter-spacing: .14em; text-transform: uppercase; }
+    .mode button[aria-pressed="true"] { color: var(--fg); background: var(--bg-soft); }
+
+    /* ---------- Panel ---------- */
+    .panel2 {
+      position: fixed; z-index: 2; background: var(--bg); box-shadow: var(--shadow);
+      left: 0; right: 0; bottom: 0; border-radius: 22px 22px 0 0;
+      padding: 10px 18px calc(16px + env(safe-area-inset-bottom));
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    /* Handle = the trip's weather, start to finish. */
+    .handle { display: flex; height: 4px; width: 72px; margin: 0 auto; border-radius: 2px; overflow: hidden; }
+    .handle i { display: block; height: 100%; }
+
+    @media (min-width: 760px) {
+      .panel2 { left: 16px; right: auto; top: 16px; bottom: auto; width: 360px; border-radius: 18px; padding-top: 16px; }
+      .handle { display: none; }
+      .mode { left: 392px; }
+    }
+
+    .tiny { font: 600 9px var(--num); letter-spacing: .24em; text-transform: uppercase; color: var(--fg-soft); }
+    .num { font-family: var(--num); font-variant-numeric: tabular-nums; }
+
+    .head { display: flex; align-items: flex-end; justify-content: space-between; }
+    .arrive b { display: block; font: 300 44px/1 var(--num); letter-spacing: -.01em; text-shadow: var(--glow-text); }
+    .arrive b small { font-size: 15px; font-weight: 400; margin-left: 4px; color: var(--fg-soft); letter-spacing: .1em; }
+    .side { text-align: right; display: flex; flex-direction: column; gap: 6px; }
+    .side div { font: 400 15px var(--num); }
+    .side div span { color: var(--fg-soft); font-size: 11px; letter-spacing: .12em; margin-left: 3px; }
+
+    /* Bar graph: each column a stretch of road, height = how rough.
+       Segmented with hairline gaps; the ghost is a peak-hold line. */
+    .bars { position: relative; display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; height: 72px; align-items: end; cursor: pointer; }
+    /* Whole segments sized in whole screen pixels (set from JS for the display's
+       scaling), with no glow, so every gap renders identically. */
+    .bar { position: relative; height: 100%; display: flex; flex-direction: column-reverse; gap: var(--gap, 2px); }
+    .bar i { display: block; flex: none; height: var(--seg, 5px); width: 100%; background: var(--c); opacity: .8; }
+    .bar.calm i { opacity: .36; }
+    .bar .peak { position: absolute; left: -1px; right: -1px; height: 2px; background: var(--fg); opacity: .9; transition: bottom .3s; }
+    .bar.sel::after { content: ""; position: absolute; left: 50%; bottom: -8px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--fg); }
+    .read { min-height: 13px; font: 500 11px var(--num); letter-spacing: .12em; text-transform: uppercase; color: var(--fg-soft); }
+    .read b { color: var(--fg); font-weight: 600; }
+
+    /* Departure: hairline tick scale with a needle, no knob. */
+    .leave { display: flex; align-items: center; gap: 12px; }
+    .leave .t { min-width: 58px; font: 400 15px var(--num); }
+    .scale { position: relative; flex: 1; height: 22px; }
+    .scale::before { content: ""; position: absolute; left: 0; right: 0; top: 4px; height: 6px; background: repeating-linear-gradient(90deg, var(--border) 0 1px, transparent 1px calc(100% / 24)); }
+    .scale::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 10px; background: repeating-linear-gradient(90deg, var(--fg-soft) 0 1px, transparent 1px calc(100% / 4)); opacity: .6; }
+    .scale input { position: absolute; inset: -6px 0; width: 100%; opacity: 0; margin: 0; cursor: pointer; }
+    .needle { position: absolute; top: -3px; width: 2px; height: 20px; margin-left: -1px; background: var(--accent); box-shadow: var(--glow); border-radius: 1px; transition: left .1s; pointer-events: none; }
+    .apply { border: none; background: none; padding: 4px 0; color: var(--accent-text); font: 600 11px var(--num); letter-spacing: .16em; text-transform: uppercase; visibility: hidden; }
+    .apply.show { visibility: visible; }
+
+    /* Routes: flat, with a thin indicator light instead of a fill. */
+    .routes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .rt { position: relative; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 14px; border: 1px solid var(--border); border-radius: 12px; background: none; color: var(--fg); text-align: left; }
+    .rt::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px; border-radius: 1px; background: transparent; }
+    .rt.on { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
+    .rt.on::before { background: var(--accent); box-shadow: var(--glow), 0 0 6px var(--accent); }
+    .rt svg { width: 18px; height: 18px; flex: none; overflow: visible; }
+    .rt svg * { fill: none; stroke-width: 2.2; stroke-linejoin: round; }
+    .rt b { display: block; font: 600 13px var(--num); letter-spacing: .06em; }
+    .rt span { font: 400 12px var(--num); color: var(--fg-soft); }
+
+    .foot { display: flex; align-items: center; gap: 10px; }
+    .dest { flex: 1; display: flex; align-items: baseline; gap: 8px; }
+    .dest b { font: 300 24px var(--num); }
+    .dest span { font: 600 10px var(--num); letter-spacing: .22em; text-transform: uppercase; color: var(--fg-soft); }
+    .go { display: flex; align-items: center; gap: 8px; padding: 11px 18px; border: none; border-radius: 12px; background: var(--accent); color: var(--accent-fg); font: 600 12px var(--num); letter-spacing: .16em; text-transform: uppercase; box-shadow: var(--glow); }
+
+    .themes { position: fixed; z-index: 3; right: 14px; bottom: calc(14px + env(safe-area-inset-bottom)); display: none; gap: 4px; }
+    @media (min-width: 760px) { .themes { display: flex; } }
+    .themes button { padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg-soft); font: 600 10px var(--num); letter-spacing: .14em; text-transform: uppercase; }
+    .themes button[aria-pressed="true"] { color: var(--fg); border-color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="map" id="map"></div>
+  <div id="signs"></div>
+
+  <div class="mode" role="tablist">
+    <button aria-pressed="true">Route</button><button>Chase</button><button>Watch</button>
+  </div>
+  <div class="gauges">
+    <!-- Theme: the icon is the real sky (sun height / moon phase). Tap cycles theme. -->
+    <button class="gauge-btn" id="sky-btn" title="Theme"></button>
+    <!-- Radar: rings = how close the rain is. -->
+    <button class="gauge-btn" title="Radar"><svg viewBox="0 0 22 22"><circle cx="11" cy="11" r="2" fill="var(--fg)"/><circle cx="11" cy="11" r="5.5" fill="none" stroke="var(--accent)" stroke-width="1.5"/><circle cx="11" cy="11" r="9" fill="none" stroke="var(--accent)" stroke-width="1.5" opacity=".5"/></svg></button>
+    <!-- Units: the thermometer is filled to the temperature here. -->
+    <button class="gauge-btn" title="°F · mi"><svg viewBox="0 0 22 22"><rect x="8.5" y="2" width="5" height="13" rx="2.5" fill="none" stroke="var(--fg-soft)" stroke-width="1.4"/><rect x="10" y="8" width="2" height="8" rx="1" fill="var(--accent)"/><circle cx="11" cy="17" r="3.4" fill="var(--accent)"/></svg></button>
+  </div>
+
+  <div class="panel2">
+    <div class="handle" id="handle"></div>
+    <div class="head">
+      <div class="arrive"><div class="tiny">Arrive</div><b class="num" id="arrive"></b></div>
+      <div class="side">
+        <div class="num">3:39<span>H</span></div>
+        <div class="num">183<span>MI</span></div>
+      </div>
+    </div>
+    <div>
+      <div class="bars" id="bars"></div>
+      <div class="read" id="read" style="margin-top:12px"></div>
+    </div>
+    <div class="leave">
+      <div class="t num" id="leave-t"></div>
+      <div class="scale"><div class="needle" id="needle"></div><input type="range" id="leave" min="0" max="6" step="0.25" value="0" aria-label="Leave time"></div>
+      <button class="apply" id="apply">Set</button>
+    </div>
+    <div class="routes" id="routes"></div>
+    <div class="foot">
+      <div class="dest"><b class="num">52°</b><span>Portland</span></div>
+      <button class="go"><svg class="i" style="width:14px;height:14px"><use href="#i-nav"/></svg>Go</button>
+    </div>
+  </div>
+
+  <div class="themes" id="themes">
+    <button data-theme="light">Light</button><button data-theme="dark">Dark</button><button data-theme="night" aria-pressed="true">Night</button>
+  </div>
+
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-nav" viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-8-8-2z"/></symbol>
+  </svg>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const color = (s) => (s === 0 ? 'var(--route-good)' : `var(--sev-${s})`);
+
+    // ---- Trip model: a rain band drifting south; stretch k is reached k*0.37 h after leaving.
+    const N = 10;
+    const sevAt = (k, leave) => { const d = Math.abs(k - (1.5 + (leave + k * 0.37) * 1.1)); return d < 0.7 ? 3 : d < 1.4 ? 2 : d < 2.3 ? 1 : 0; };
+    const trip = (leave) => Array.from({ length: N }, (_, k) => sevAt(k, leave));
+    const clock = (h) => { const d = new Date(2026, 10, 6, 12, 50 + Math.round(h * 60)); return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M/, ''); };
+    const ampm = (h) => (new Date(2026, 10, 6, 12, 50 + Math.round(h * 60)).getHours() >= 12 ? 'PM' : 'AM');
+    const WORD = ['Clear', 'Light rain', 'Rain', 'Heavy rain'];
+
+    // ---- Map: route from Seattle (top) to Portland (bottom), thinning with forecast distance.
+    const P = [[255, 70], [262, 140], [240, 210], [244, 280], [214, 350], [205, 420], [222, 490], [196, 560], [180, 630], [176, 700], [168, 760]];
+    function drawMap(sevs) {
+      const segs = P.slice(0, -1).map((p, k) => {
+        const t = k / (P.length - 2);
+        return `<path class="route" d="M ${p} L ${P[k + 1]}" stroke="${color(sevs[k])}" stroke-width="${(7 - 4 * t).toFixed(1)}" opacity="${(1 - 0.45 * t).toFixed(2)}"/>`;
+      }).join('');
+      // Phones fill the screen with the map; wide screens fit the whole route.
+      const wide = innerWidth >= 760;
+      $('map').innerHTML = `<svg viewBox="0 0 400 820" preserveAspectRatio="${wide ? 'xMidYMid meet' : 'xMidYMin slice'}">
+        <path class="water" d="M0 0 H120 C140 160 90 330 125 470 C150 560 100 690 110 820 H0 Z"/>
+        <path class="water" d="M300 0 C310 60 330 110 318 170 C306 210 290 180 286 140 C282 90 280 40 276 0 Z"/>
+        <path class="roads" d="${Array.from({ length: 15 }, (_, i) => `M0 ${30 + i * 56} L400 ${36 + i * 56}`).join(' ')} ${Array.from({ length: 7 }, (_, i) => `M${40 + i * 60} 0 L${32 + i * 60} 820`).join(' ')}" opacity=".55"/>
+        <path class="roads major" d="M340 0 C320 260 360 520 330 820 M0 300 C140 290 260 320 400 300"/>
+        <text class="place" x="270" y="62">SEATTLE</text><text class="place" x="262" y="300">TACOMA</text>
+        <text class="place" x="140" y="430">CENTRALIA</text><text class="place" x="190" y="772">PORTLAND</text>
+        ${segs}</svg>`;
+      // Signs only on stretches that aren't calm.
+      const svg = $('map').querySelector('svg');
+      const box = svg.getBoundingClientRect();
+      const s = (wide ? Math.min : Math.max)(box.width / 400, box.height / 820);
+      const ox = (box.width - 400 * s) / 2;
+      const oy = wide ? (box.height - 820 * s) / 2 : 0;
+      const shown = new Set();
+      $('signs').innerHTML = sevs.map((sev, k) => {
+        if (!sev) return '';
+        const key = `${sev}-${Math.floor(k / 2)}`;
+        if (shown.has(key)) return '';
+        shown.add(key);
+        const [x, y] = [(P[k][0] + P[k + 1][0]) / 2, (P[k][1] + P[k + 1][1]) / 2];
+        return `<div class="sign" style="left:${ox + (x + 30) * s}px;top:${oy + y * s}px"><svg viewBox="0 0 26 26" style="stroke:${color(sev)}">${SHAPE[sev]}</svg><b>${55 - sev * 2}°</b></div>`;
+      }).join('');
+    }
+    const SHAPE = {
+      1: '<rect x="2" y="5" width="22" height="16" rx="4"/>',
+      2: '<path d="M13 1 L25 13 L13 25 L1 13 Z"/>',
+      3: '<path d="M8.5 1 H17.5 L25 8.5 V17.5 L17.5 25 H8.5 L1 17.5 V8.5 Z"/>',
+    };
+
+    // ---- Panel
+    // Segment and gap sizes snapped to whole device pixels (125% / 150% Windows
+    // scaling would otherwise round some gaps to 2 px and others to 3 px).
+    let seg = 5;
+    let gap = 2;
+    function snapSegments() {
+      const dpr = devicePixelRatio || 1;
+      seg = Math.round(5 * dpr) / dpr;
+      gap = Math.max(1, Math.round(2 * dpr)) / dpr;
+      document.documentElement.style.setProperty('--seg', `${seg}px`);
+      document.documentElement.style.setProperty('--gap', `${gap}px`);
+    }
+    snapSegments();
+    addEventListener('resize', snapSegments);
+
+    let placed = 0;
+    let sel = null;
+    function render() {
+      const g = Number($('leave').value);
+      const now = trip(placed);
+      const ghost = trip(g);
+      const ghostOn = g !== placed;
+      $('arrive').innerHTML = `${clock(placed + 3.65)}<small>${ampm(placed + 3.65)}</small>`;
+      $('handle').innerHTML = now.map((s) => `<i style="flex:1;background:${color(s)}"></i>`).join('');
+      $('bars').innerHTML = now.map((s, k) => {
+        const SEGS = [2, 5, 7, 10]; // segments lit per severity (of 10)
+        const peak = SEGS[ghost[k]] * (seg + gap) - gap; // top of the ghost's last segment, in px
+        return `<div class="bar${s ? '' : ' calm'}${sel === k ? ' sel' : ''}" data-k="${k}" style="--c:${color(s)}">${'<i></i>'.repeat(SEGS[s])}${ghostOn ? `<span class="peak" style="bottom:${peak}px"></span>` : ''}</div>`;
+      }).join('');
+      $('leave-t').textContent = g === 0 ? 'Now' : `${clock(g)} ${ampm(g)}`;
+      $('needle').style.left = `${(g / 6) * 100}%`;
+      $('apply').classList.toggle('show', ghostOn);
+      $('read').innerHTML = sel != null
+        ? `<b>${WORD[now[sel]]}</b> · mile ${sel * 18} · ${clock(placed + sel * 0.37)}`
+        : ghostOn ? `Line shows leaving ${clock(g)}` : '';
+      drawMap(now);
+    }
+    $('leave').addEventListener('input', () => { sel = null; render(); });
+    $('apply').addEventListener('click', () => { placed = Number($('leave').value); render(); });
+    $('bars').addEventListener('click', (e) => { const b = e.target.closest('.bar'); sel = b && Number(b.dataset.k) !== sel ? Number(b.dataset.k) : null; render(); });
+    addEventListener('resize', render);
+
+    $('routes').innerHTML = [['I-5', '3:39', 2, true], ['US-101', '+1:14', 1, false]].map(([n, t, s, on]) =>
+      `<button class="rt${on ? ' on' : ''}"><svg viewBox="0 0 26 26" style="stroke:${color(s)}">${SHAPE[s]}</svg><div><b>${n}</b><span>${t}</span></div></button>`).join('');
+    $('routes').addEventListener('click', (e) => { const b = e.target.closest('.rt'); if (b) document.querySelectorAll('.rt').forEach((x) => x.classList.toggle('on', x === b)); });
+
+    // ---- Theme + sky button (sun by day, moon at night)
+    const THEMES = ['light', 'dark', 'night'];
+    function sky() {
+      const t = document.documentElement.dataset.theme;
+      $('sky-btn').innerHTML = t === 'light'
+        ? '<svg viewBox="0 0 22 22"><path d="M3 16 H19" stroke="var(--fg-soft)" stroke-width="1.4"/><circle cx="11" cy="8" r="4" fill="var(--sev-1)"/></svg>'
+        : '<svg viewBox="0 0 22 22"><path d="M15 3.5a8 8 0 1 0 3.5 13 6.5 6.5 0 0 1-3.5-13z" fill="var(--fg)"/></svg>';
+      document.querySelectorAll('#themes button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.theme === t)));
+    }
+    function setTheme(t) { document.documentElement.dataset.theme = t; sky(); render(); }
+    $('sky-btn').addEventListener('click', () => setTheme(THEMES[(THEMES.indexOf(document.documentElement.dataset.theme) + 1) % 3]));
+    document.querySelectorAll('#themes button').forEach((b) => b.addEventListener('click', () => setTheme(b.dataset.theme)));
+    sky();
+    render();
+  </script>
+</body>
+</html>
