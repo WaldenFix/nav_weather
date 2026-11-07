@@ -65,11 +65,13 @@ export class Navigator {
 
     const along = cumDist[best];
     const next = steps.find((s) => s.startDist > along + 5) ?? steps[steps.length - 1];
+    const current = steps.findLast((s) => s.startDist <= along + 5) ?? steps[0];
     this.onUpdate({
       position: here,
       heading: pos.coords.heading,
       speed: pos.coords.speed,
       along,
+      current,
       next,
       toNext: Math.max(0, next.startDist - along),
       remainingDist: distance - along,

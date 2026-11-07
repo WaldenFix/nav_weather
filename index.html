@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Nav Weather</title>
   <meta name="description" content="Open-source navigation with weather forecasts along your route and at your destination.">
-  <meta name="theme-color" content="#1d4ed8">
+  <meta name="theme-color" content="#2563eb">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <!-- iPhone: "Add to Home Screen" opens full-screen with this icon and name -->
@@ -14,17 +14,63 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Nav Weather">
+  <!-- Pick the theme before first paint so the page doesn't flash light. Same rules as theme() in app.js. -->
+  <script>
+    (function () {
+      var t = 'auto';
+      try { t = localStorage.getItem('theme') || 'auto'; } catch (e) {}
+      if (t === 'auto') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = t;
+    })();
+  </script>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+  <!-- Line icons, drawn in the current text colour. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-locate" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/></symbol>
+    <symbol id="i-swap" viewBox="0 0 24 24"><path d="M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
+    <symbol id="i-nav" viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-8-8-2z"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1"/></symbol>
+    <symbol id="i-thermo" viewBox="0 0 24 24"><path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0z"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></symbol>
+    <symbol id="i-glow" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" fill="currentColor"/><circle cx="12" cy="12" r="9" opacity=".45"/></symbol>
+    <symbol id="i-turn-right" viewBox="0 0 24 24"><path d="M6 20v-7a4 4 0 0 1 4-4h9"/><path d="M15 5l4 4-4 4"/></symbol>
+    <symbol id="i-straight" viewBox="0 0 24 24"><path d="M12 20V4M6 10l6-6 6 6"/></symbol>
+    <symbol id="i-uturn" viewBox="0 0 24 24"><path d="M7 20V10a5 5 0 0 1 10 0v7"/><path d="M13 13l4 4 4-4"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4h12l-2.5 4L17 12H5"/></symbol>
+    <symbol id="i-car" viewBox="0 0 24 24"><path d="M12 2l7 18-7-4-7 4 7-18z" fill="currentColor"/></symbol>
+  </svg>
+
   <div id="map"></div>
 
   <aside id="panel" class="panel">
     <header class="panel-head">
-      <h1>Nav Weather</h1>
-      <button id="collapse" class="icon-btn" title="Collapse panel" aria-label="Collapse panel">▾</button>
+      <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
+        <rect class="logo-bg" width="64" height="64" rx="14"/>
+        <path class="logo-mark" d="M20 44 L32 14 L44 44 L32 37 Z"/>
+        <circle class="logo-sun" cx="46" cy="18" r="7"/>
+      </svg>
+      <div class="title">
+        <h1>Nav Weather</h1>
+        <p>Forecasts for when you're there</p>
+      </div>
+      <button id="collapse" class="icon-btn ghost" title="Collapse panel" aria-label="Collapse panel"><svg class="i"><use href="#i-chevron"/></svg></button>
     </header>
+
+    <div class="mode-tabs segmented" role="tablist" aria-label="Mode">
+      <button type="button" role="tab" data-mode="" aria-selected="true">🧭 Route</button>
+      <button type="button" role="tab" data-mode="chaser" aria-selected="false">⛈️ Chase</button>
+      <button type="button" role="tab" data-mode="watcher" aria-selected="false">🔭 Watch</button>
+    </div>
 
     <div class="panel-body">
       <section id="chaser" class="chaser" hidden>
@@ -54,49 +100,61 @@
       </section>
 
       <form id="route-form" autocomplete="off">
-        <div class="field">
-          <label for="from">From</label>
-          <div class="input-row">
-            <input id="from" type="text" placeholder="Start address or place" spellcheck="false">
-            <button type="button" id="locate" class="icon-btn" title="Use my location" aria-label="Use my location">◎</button>
+        <div class="trip-card">
+          <div class="stop field">
+            <span class="marker from" aria-hidden="true"></span>
+            <div class="stop-text">
+              <label for="from">From</label>
+              <input id="from" type="text" placeholder="Start address or place" spellcheck="false">
+            </div>
+            <button type="button" id="locate" class="icon-btn" title="Use my location" aria-label="Use my location"><svg class="i"><use href="#i-locate"/></svg></button>
+            <ul class="suggestions" id="from-suggestions" role="listbox"></ul>
           </div>
-          <ul class="suggestions" id="from-suggestions" role="listbox"></ul>
-        </div>
-        <div class="field">
-          <label for="via">Via <span class="optional">(optional, e.g. Albuquerque to take I-40)</span></label>
-          <div class="input-row">
-            <input id="via" type="text" placeholder="Go through a town or road" spellcheck="false">
-            <button type="button" id="clear-via" class="icon-btn" title="Remove stop" aria-label="Remove stop">✕</button>
+          <div class="stop field via">
+            <span class="marker via" aria-hidden="true"></span>
+            <div class="stop-text">
+              <label for="via">Via · optional</label>
+              <input id="via" type="text" placeholder="Add a stop (e.g. Albuquerque for I-40)" spellcheck="false">
+            </div>
+            <button type="button" id="clear-via" class="icon-btn ghost" title="Remove stop" aria-label="Remove stop"><svg class="i"><use href="#i-x"/></svg></button>
+            <ul class="suggestions" id="via-suggestions" role="listbox"></ul>
           </div>
-          <ul class="suggestions" id="via-suggestions" role="listbox"></ul>
-        </div>
-        <div class="field">
-          <label for="to">To</label>
-          <div class="input-row">
-            <input id="to" type="text" placeholder="Destination" spellcheck="false">
-            <button type="button" id="swap" class="icon-btn" title="Swap start and destination" aria-label="Swap">⇅</button>
+          <div class="stop field">
+            <span class="marker to" aria-hidden="true"></span>
+            <div class="stop-text">
+              <label for="to">To</label>
+              <input id="to" type="text" placeholder="Destination" spellcheck="false">
+            </div>
+            <button type="button" id="swap" class="icon-btn" title="Swap start and destination" aria-label="Swap"><svg class="i"><use href="#i-swap"/></svg></button>
+            <ul class="suggestions" id="to-suggestions" role="listbox"></ul>
           </div>
-          <ul class="suggestions" id="to-suggestions" role="listbox"></ul>
         </div>
 
-        <div class="field">
-          <label for="depart">Leave <strong id="depart-label">now</strong></label>
+        <div class="depart">
+          <div class="depart-row">
+            <svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>
+            <label for="depart">Leave</label>
+            <span class="pill" id="depart-label">Now</span>
+          </div>
           <input id="depart" type="range" min="0" max="72" step="0.25" value="0">
+          <div class="ticks" aria-hidden="true"><span>Now</span><span>+24 h</span><span>+48 h</span><span>+72 h</span></div>
         </div>
 
-        <button type="submit" id="go" class="primary">Get route &amp; weather</button>
+        <button type="submit" id="go" class="primary"><svg class="i" aria-hidden="true"><use href="#i-nav"/></svg>Get route &amp; weather</button>
       </form>
 
       <div id="status" class="status" hidden></div>
 
       <section id="results" hidden>
+        <h2>Your trip</h2>
+        <div class="summary" id="summary"></div>
+        <p class="hint" id="summary-note"></p>
+        <div id="intercept" class="intercept" hidden></div>
+        <div id="best-time" class="best-time" hidden></div>
+
         <h2>Routes</h2>
         <div class="route-options" id="route-options"></div>
         <div class="hint" id="alt-status"></div>
-
-        <div class="summary" id="summary"></div>
-        <div id="intercept" class="intercept" hidden></div>
-        <div id="best-time" class="best-time" hidden></div>
 
         <h2>Along the route</h2>
         <div class="timeline" id="timeline"></div>
@@ -110,43 +168,88 @@
         <h2>At your destination</h2>
         <div class="dest" id="dest"></div>
 
-        <details class="steps">
-          <summary>Turn-by-turn directions</summary>
+        <details class="disclosure steps">
+          <summary><svg class="i" aria-hidden="true"><use href="#i-list"/></svg><span>Turn-by-turn directions</span><svg class="i chev" aria-hidden="true"><use href="#i-chevron"/></svg></summary>
           <ol id="steps"></ol>
         </details>
-
-        <button id="start-nav" class="primary">Start navigation</button>
       </section>
 
-      <details class="settings" id="settings">
-        <summary>Settings</summary>
-        <label for="wsdot-code">WSDOT access code <span class="optional">(Washington road closures, incidents &amp; pass conditions)</span></label>
-        <div class="input-row">
-          <input id="wsdot-code" type="text" placeholder="Paste your free access code" spellcheck="false" autocomplete="off">
-          <button type="button" id="wsdot-save" class="icon-btn" title="Save" aria-label="Save access code">✓</button>
+      <details class="disclosure settings" id="settings">
+        <summary><svg class="i" aria-hidden="true"><use href="#i-gear"/></svg><span>Settings</span><svg class="i chev" aria-hidden="true"><use href="#i-chevron"/></svg></summary>
+        <div class="settings-body">
+          <label for="wsdot-code">WSDOT access code <span class="optional">(Washington road closures, incidents &amp; pass conditions)</span></label>
+          <div class="input-row">
+            <input id="wsdot-code" type="text" placeholder="Paste your free access code" spellcheck="false" autocomplete="off">
+            <button type="button" id="wsdot-save" class="icon-btn" title="Save" aria-label="Save access code">✓</button>
+          </div>
+          <p class="hint">Get one free at <a href="https://wsdot.wa.gov/traffic/api/" target="_blank" rel="noopener">wsdot.wa.gov/traffic/api</a> (just an email address). It's stored only on this device.</p>
         </div>
-        <p class="hint">Get one free at <a href="https://wsdot.wa.gov/traffic/api/" target="_blank" rel="noopener">wsdot.wa.gov/traffic/api</a> (just an email address). It's stored only on this device.</p>
       </details>
     </div>
+
+    <footer class="panel-foot" id="panel-foot" hidden>
+      <button id="start-nav" class="primary"><svg class="i" aria-hidden="true"><use href="#i-nav"/></svg>Start navigation</button>
+    </footer>
   </aside>
 
-  <div id="nav-banner" class="nav-banner" hidden>
-    <div class="nav-instruction" id="nav-instruction"></div>
-    <div class="nav-meta" id="nav-meta"></div>
-    <div class="nav-weather" id="nav-weather"></div>
-    <button id="stop-nav" class="icon-btn" title="End navigation" aria-label="End navigation">✕</button>
+  <!-- Live navigation. In the Night theme this is the "night panel": only the next
+       turn, where you are and the arrival time stay lit; weather lights up when it matters. -->
+  <div id="nav-ui" class="nav-ui" hidden>
+    <div class="nav-top">
+      <div class="nav-card">
+        <svg class="i nav-turn" id="nav-turn" aria-hidden="true"><use href="#i-straight"/></svg>
+        <div class="nav-text">
+          <div class="nav-dist"><b id="nav-dist"></b><span id="nav-dist-unit"></span></div>
+          <div class="nav-instruction" id="nav-instruction"></div>
+        </div>
+      </div>
+      <div class="nav-tools">
+        <button id="night-toggle" class="icon-btn" title="Night mode" aria-label="Night mode" aria-pressed="false"><svg class="i"><use href="#i-moon"/></svg></button>
+        <button id="stop-nav" class="icon-btn" title="End navigation" aria-label="End navigation"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="nav-alert" id="nav-alert" hidden>
+        <span class="ic" id="nav-alert-icon"></span>
+        <div><b id="nav-alert-title"></b><small id="nav-alert-detail"></small></div>
+      </div>
+    </div>
+
+    <div class="nav-bottom">
+      <div class="now-on" id="now-on" hidden>
+        <span class="badge" id="now-badge" hidden></span>
+        <b id="now-road"></b>
+        <i class="sep" id="now-sep" hidden></i>
+        <span id="now-town"></span>
+      </div>
+      <div class="gauge">
+        <svg viewBox="0 0 300 160" aria-hidden="true">
+          <g id="gauge-ticks"></g>
+          <path class="g-track" d="M 20 150 A 130 130 0 0 1 280 150" pathLength="100"/>
+          <path class="g-hazard" id="gauge-hazard" d="M 20 150 A 130 130 0 0 1 280 150" pathLength="100"/>
+          <path class="g-progress" id="gauge-progress" d="M 20 150 A 130 130 0 0 1 280 150" pathLength="100"/>
+        </svg>
+        <div class="gauge-read">
+          <small>Arrive</small>
+          <b id="nav-arrive">–</b>
+          <span id="nav-meta"></span>
+        </div>
+        <div class="gauge-ends">
+          <span id="nav-from"></span>
+          <span id="nav-dest-wx"></span>
+          <span id="nav-to"></span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="map-controls">
-    <button id="toggle-chaser" class="chip" aria-pressed="false">⛈️ Storm chaser</button>
-    <button id="toggle-watcher" class="chip" aria-pressed="false">🔭 Storm watcher</button>
-    <button id="toggle-radar" class="chip" aria-pressed="false">Radar</button>
-    <button id="toggle-units" class="chip">°F · mi</button>
+    <button id="toggle-theme" class="chip" title="Theme"><svg class="i" aria-hidden="true"><use href="#i-auto"/></svg><span id="theme-label">Auto</span></button>
+    <button id="toggle-radar" class="chip" aria-pressed="false" title="Precipitation radar"><svg class="i" aria-hidden="true"><use href="#i-layers"/></svg><span id="radar-label">Radar</span></button>
+    <button id="toggle-units" class="chip" title="Units"><svg class="i" aria-hidden="true"><use href="#i-thermo"/></svg><span id="units-label">°F · mi</span></button>
   </div>
 
   <!-- Colours from RainViewer's "Universal Blue" scheme (rainviewer.com/files/rainviewer_api_colors_table.csv). -->
   <div id="radar-legend" class="radar-legend" hidden>
-    <div>Radar: rain &amp; snow (not wind)</div>
+    <div class="legend-title">Radar · rain &amp; snow (not wind)</div>
     <div class="bar" style="background: linear-gradient(90deg, #88ddee, #00a3e0 18%, #005588 36%, #ffee00 46%, #ffaa00 58%, #ff4400 70%, #c10000 82%, #ff77ff)"></div>
     <div class="ends"><span>Light</span><span>Heavy</span><span>Hail</span></div>
     <div class="bar" style="background: linear-gradient(90deg, #c3ffff, #7fbfff, #002fff)"></div>

@@ -1,5 +1,5 @@
-import { search } from './geocode.js';
-import { getRoute, getAlternatives, samplePoints, haversine } from './route.js';
+import { search, reverse } from './geocode.js';
+import { getRoute, getAlternatives, samplePoints, haversine, prettyRoad } from './route.js';
 import { fetchForecasts, alongRoute, conditionsAt, routeScore } from './weather.js';
 import { SEVERITY_LABEL } from './wmo.js';
 import { showRadar, hideRadar } from './radar.js';
@@ -12,6 +12,9 @@ import { fetchWsdot, inWashington, onRoute, reportSeverity } from './roads.js';
 // OpenFreeMap: free, keyless vector tiles of OpenStreetMap (https://openfreemap.org).
 const MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 const MAX_DEPART_HOURS = 72;
+// While driving, a weather warning lights up when it's this close (whichever comes first).
+const ALERT_WITHIN_M = 65000;
+const ALERT_WITHIN_S = 45 * 60;
 const SEV_COLORS = ['#16a34a', '#ca8a04', '#ea580c', '#dc2626'];
 
 const $ = (id) => document.getElementById(id);
@@ -45,6 +48,8 @@ const state = {
   roadMarkers: [],
   // GPS, start and destination bias searches and storm scans; see anchors().
   target: null, // storm target or viewing spot we're routing to; .kind is 'chase' or 'watch'
+  themePref: loadTheme(), // 'auto', 'light', 'dark' or 'night'
+  town: '', // town we're driving through, from reverse geocoding
 };
 
 // Offline app shell + "Add to Home Screen" support. Skipped on plain http (except localhost).
@@ -132,6 +137,14 @@ mapReady.then(() => {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: { 'line-color': '#1e293b', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 6, 14, 12], 'line-opacity': 0.55 },
   });
+  // Soft glow under the route, only visible in the Night theme.
+  map.addLayer({
+    id: 'route-glow',
+    type: 'line',
+    source: 'route',
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 10, 14, 22], 'line-blur': 8, 'line-opacity': 0 },
+  });
   map.addLayer({
     id: 'route-line',
     type: 'line',
@@ -183,6 +196,160 @@ map.on('contextmenu', (e) => {
   }
   const popup = new maplibregl.Popup({ closeButton: false }).setLngLat(e.lngLat).setDOMContent(wrap).addTo(map);
 });
+
+// ---------------------------------------------------------------- themes
+
+// Light, Dark (warm charcoal) and Night (amber, for night driving). "Auto" follows
+// the phone's light/dark setting, and switches to Night when you navigate in the dark.
+const THEMES = ['auto', 'light', 'dark', 'night'];
+const THEME_LABEL = { auto: 'Auto', light: 'Light', dark: 'Dark', night: 'Night' };
+const THEME_ICON = { auto: '#i-auto', light: '#i-sun', dark: '#i-moon', night: '#i-glow' };
+const systemDark = matchMedia('(prefers-color-scheme: dark)');
+
+// Base-map colours for the dark themes. Light keeps OpenFreeMap's own colours.
+// Night keeps roads faintly visible ("ghosted"), with highways brightest.
+const MAP_COLORS = {
+  dark: { land: '#15120f', water: '#1c2630', park: '#182019', building: '#1f1b17', major: '#4a4037', mid: '#3a332c', minor: '#2e2822', rail: '#2a241f', boundary: '#4a4037', label: '#a99f93', halo: '#15120f', icons: 0.6, relief: 0.22 },
+  night: { land: '#000000', water: '#140b05', park: '#0a0704', building: '#0a0603', major: '#6a3c14', mid: '#45230b', minor: '#2a1608', rail: '#1f1007', boundary: '#45230b', label: '#b0672a', halo: '#000000', icons: 0.3, relief: 0.08 },
+};
+const OUR_SOURCES = new Set(['nws', 'storm-grid', 'watch', 'alts', 'route', 'radar']);
+const originalPaint = new Map(); // "layer|property" -> value before we recoloured it
+
+function loadTheme() {
+  try {
+    // Runs while `state` is being built, before THEMES exists.
+    const saved = localStorage.getItem('theme');
+    if (['light', 'dark', 'night'].includes(saved)) return saved;
+  } catch {}
+  return 'auto';
+}
+
+function theme() {
+  if (state.themePref !== 'auto') return state.themePref;
+  if (systemDark.matches) return state.nav ? 'night' : 'dark';
+  return 'light';
+}
+
+function setThemePref(pref) {
+  state.themePref = pref;
+  try { localStorage.setItem('theme', pref); } catch {}
+  applyTheme();
+}
+
+function applyTheme() {
+  const t = theme();
+  document.documentElement.dataset.theme = t;
+  document.querySelector('meta[name="theme-color"]').content = cssVar('--bg');
+  $('theme-label').textContent = THEME_LABEL[state.themePref];
+  $('toggle-theme').querySelector('use').setAttribute('href', THEME_ICON[state.themePref]);
+  $('toggle-theme').title = `Theme: ${THEME_LABEL[state.themePref]}${state.themePref === 'auto' ? ` (${THEME_LABEL[t]} now)` : ''}`;
+  $('night-toggle').setAttribute('aria-pressed', String(t === 'night'));
+  mapReady.then(() => styleMap(t));
+}
+
+$('toggle-theme').addEventListener('click', () => {
+  setThemePref(THEMES[(THEMES.indexOf(state.themePref) + 1) % THEMES.length]);
+});
+
+// While driving: one tap in and out of Night.
+$('night-toggle').addEventListener('click', () => {
+  if (theme() === 'night') {
+    state.themePref = 'auto';
+    if (theme() === 'night') state.themePref = 'dark';
+    setThemePref(state.themePref);
+  } else {
+    setThemePref('night');
+  }
+});
+
+systemDark.addEventListener('change', applyTheme);
+// Recolour as soon as the style arrives, before tiles load, so there's no flash of the light map.
+map.once('style.load', () => styleMap(theme()));
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function setPaint(id, prop, value) {
+  const key = `${id}|${prop}`;
+  if (!originalPaint.has(key)) originalPaint.set(key, map.getPaintProperty(id, prop));
+  map.setPaintProperty(id, prop, value);
+}
+
+// Recolour OpenFreeMap's style layers by what they draw.
+function styleMap(t) {
+  const c = MAP_COLORS[t];
+  if (!c) {
+    for (const [key, value] of originalPaint) {
+      const [id, prop] = key.split('|');
+      if (map.getLayer(id)) map.setPaintProperty(id, prop, value);
+    }
+  } else {
+    for (const layer of map.getStyle().layers) {
+      if (OUR_SOURCES.has(layer.source)) continue;
+      const id = layer.id;
+      const src = layer['source-layer'] ?? '';
+      const road = /motorway|trunk/.test(id) ? c.major : /primary|secondary/.test(id) ? c.mid : c.minor;
+      switch (layer.type) {
+        case 'background':
+          setPaint(id, 'background-color', c.land);
+          break;
+        case 'fill': {
+          const fill = src === 'water' ? c.water
+            : src === 'building' ? c.building
+              : /park|wood|forest|grass|wetland|scrub|meadow|farmland|national/.test(id) ? c.park
+                : src === 'aeroway' || src === 'transportation' ? c.minor
+                  : c.land;
+          setPaint(id, 'fill-color', fill);
+          setPaint(id, 'fill-outline-color', fill);
+          // Patterned fills (wetland, plazas) are light images; fade them right down.
+          if (layer.paint?.['fill-pattern']) setPaint(id, 'fill-opacity', 0.06);
+          break;
+        }
+        case 'fill-extrusion':
+          setPaint(id, 'fill-extrusion-color', c.building);
+          break;
+        case 'line':
+          if (src === 'waterway' || src === 'water') setPaint(id, 'line-color', c.water);
+          else if (src === 'boundary') setPaint(id, 'line-color', c.boundary);
+          else if (/casing/.test(id)) setPaint(id, 'line-color', c.land);
+          else if (/rail|transit|ferry/.test(id)) setPaint(id, 'line-color', c.rail);
+          else setPaint(id, 'line-color', road);
+          break;
+        case 'symbol':
+          setPaint(id, 'text-color', c.label);
+          setPaint(id, 'text-halo-color', c.halo);
+          setPaint(id, 'icon-opacity', c.icons);
+          break;
+        case 'raster': // shaded relief at country zoom
+          setPaint(id, 'raster-saturation', -1);
+          setPaint(id, 'raster-brightness-max', c.relief);
+          break;
+        case 'hillshade':
+          setPaint(id, 'hillshade-shadow-color', c.land);
+          setPaint(id, 'hillshade-highlight-color', c.minor);
+          setPaint(id, 'hillshade-accent-color', c.land);
+          break;
+        default:
+      }
+    }
+  }
+  styleRouteLayers(t);
+}
+
+function styleRouteLayers(t) {
+  if (!map.getLayer('route-line')) return; // not added yet; styled again once they are
+  const sev = [cssVar('--route-good'), cssVar('--sev-1'), cssVar('--sev-2'), cssVar('--sev-3')];
+  const color = ['match', ['get', 'sev'], 0, sev[0], 1, sev[1], 2, sev[2], 3, sev[3], cssVar('--accent')];
+  map.setPaintProperty('route-line', 'line-color', color);
+  map.setPaintProperty('route-glow', 'line-color', color);
+  map.setPaintProperty('route-glow', 'line-opacity', t === 'night' ? 0.55 : 0);
+  map.setPaintProperty('route-casing', 'line-color', cssVar('--route-casing'));
+  map.setPaintProperty('route-casing', 'line-opacity', t === 'light' ? 0.55 : 0.9);
+  map.setPaintProperty('alt-line', 'line-color', cssVar('--route-alt'));
+}
+
+applyTheme();
 
 // ---------------------------------------------------------------- search inputs
 
@@ -317,7 +484,8 @@ function departAt() {
 }
 
 function updateDepartLabel() {
-  $('depart-label').textContent = state.departOffset === 0 ? 'now' : fmtDayTime(departAt());
+  const label = state.departOffset === 0 ? 'now' : fmtDayTime(departAt());
+  $('depart-label').textContent = label[0].toUpperCase() + label.slice(1);
 }
 
 // ---------------------------------------------------------------- units
@@ -341,7 +509,7 @@ function loadUnits() {
 }
 
 function updateUnitsChip() {
-  $('toggle-units').textContent = state.imperial ? '°F · mi' : '°C · km';
+  $('units-label').textContent = state.imperial ? '°F · mi' : '°C · km';
 }
 
 // ---------------------------------------------------------------- radar
@@ -356,7 +524,7 @@ async function enableRadar() {
     state.radarOn = true;
     $('radar-legend').hidden = false;
     btn.setAttribute('aria-pressed', 'true');
-    btn.textContent = `Radar ${fmtTime(time.getTime() / 1000)}`;
+    $('radar-label').textContent = `Radar ${fmtTime(time.getTime() / 1000)}`;
   } catch (err) {
     showStatus(err.message, true);
   }
@@ -367,7 +535,7 @@ function disableRadar() {
   state.radarOn = false;
   $('radar-legend').hidden = true;
   $('toggle-radar').setAttribute('aria-pressed', 'false');
-  $('toggle-radar').textContent = 'Radar';
+  $('radar-label').textContent = 'Radar';
 }
 
 // ---------------------------------------------------------------- routing + weather
@@ -494,6 +662,7 @@ function render() {
   renderBestTime(t0);
   updateDepartLabel();
   $('results').hidden = false;
+  $('panel-foot').hidden = false;
 }
 
 function drawAlternatives() {
@@ -742,19 +911,20 @@ function card(lines) {
 function renderSummary(route, pts) {
   const last = pts[pts.length - 1];
   const items = [
-    [fmtDist(route.distance), 'distance'],
-    [fmtDuration(last.eta - pts[0].eta), last.delay >= 60 ? `drive time (+${fmtDuration(last.delay)} weather)` : 'drive time'],
-    [fmtTime(last.eta), 'arrival'],
+    ['Distance', fmtDist(route.distance)],
+    ['Drive', fmtDuration(last.eta - pts[0].eta).replace(' min', ' m')],
+    ['Arrive', fmtTime(last.eta)],
   ];
-  $('summary').replaceChildren(...items.map(([v, l]) => {
+  $('summary').replaceChildren(...items.map(([l, v]) => {
     const d = document.createElement('div');
-    const b = document.createElement('b');
-    b.textContent = v;
     const s = document.createElement('span');
     s.textContent = l;
-    d.append(b, s);
+    const b = document.createElement('b');
+    b.textContent = v;
+    d.append(s, b);
     return d;
   }));
+  $('summary-note').textContent = last.delay >= 60 ? `Includes ${fmtDuration(last.delay)} of weather slow-downs` : '';
 }
 
 function renderTimeline(pts) {
@@ -917,9 +1087,11 @@ function renderBestTime(t0) {
     return;
   }
   el.hidden = false;
-  el.textContent = `🕑 Leaving ${fmtDayTime(state.baseTime + best.offset * 3600)} looks like a calmer drive.`;
+  const text = document.createElement('span');
+  text.textContent = `💡 Leaving ${fmtDayTime(state.baseTime + best.offset * 3600)} looks like a calmer drive.`;
+  el.replaceChildren(text);
   const btn = document.createElement('button');
-  btn.textContent = 'Use that time';
+  btn.textContent = 'Use';
   btn.addEventListener('click', () => {
     state.departOffset = best.offset;
     $('depart').value = best.offset;
@@ -932,16 +1104,14 @@ function renderBestTime(t0) {
 
 // Chaser and watcher are two takes on the same storms, so only one is on at a time.
 // They share the radar, the storm-potential map layer and the NWS warnings.
-$('toggle-chaser').addEventListener('click', () => setMode(state.chaser ? null : 'chaser'));
-$('toggle-watcher').addEventListener('click', () => setMode(state.watcher ? null : 'watcher'));
+document.querySelectorAll('.mode-tabs button').forEach((btn) => btn.addEventListener('click', () => setMode(btn.dataset.mode || null)));
 $('scan').addEventListener('click', scanArea);
 $('watch-scan').addEventListener('click', scanViewArea);
 
 function setMode(mode) {
   state.chaser = mode === 'chaser';
   state.watcher = mode === 'watcher';
-  $('toggle-chaser').setAttribute('aria-pressed', String(state.chaser));
-  $('toggle-watcher').setAttribute('aria-pressed', String(state.watcher));
+  document.querySelectorAll('.mode-tabs button').forEach((b) => b.setAttribute('aria-selected', String((b.dataset.mode || null) === mode)));
   $('chaser').hidden = !state.chaser;
   $('watcher').hidden = !state.watcher;
   $('panel').classList.remove('collapsed');
@@ -1347,10 +1517,21 @@ function startNavigation() {
   render();
 
   document.body.classList.add('navigating');
-  $('nav-banner').hidden = false;
+  $('nav-ui').hidden = false;
+  $('nav-dist').textContent = '';
+  $('nav-dist-unit').textContent = '';
   $('nav-instruction').textContent = 'Waiting for GPS…';
   $('nav-meta').textContent = '';
-  $('nav-weather').textContent = '';
+  $('nav-arrive').textContent = '–';
+  $('nav-alert').hidden = true;
+  $('now-on').hidden = true;
+  $('nav-from').textContent = shortName(state.from);
+  $('nav-to').textContent = shortName(state.to);
+  $('nav-dest-wx').textContent = '';
+  setGauge('gauge-progress', 0, 0);
+  setGauge('gauge-hazard', 0, 0);
+  state.town = '';
+  state.townLookup = null;
 
   let rerouting = false;
   state.nav = new Navigator(state.route, {
@@ -1374,6 +1555,7 @@ function startNavigation() {
     },
   });
   state.nav.start();
+  applyTheme(); // "Auto" switches to Night when navigating in the dark
   keepAwake();
 }
 
@@ -1396,17 +1578,38 @@ function updateNavigation(u) {
   if (!state.meMarker) {
     const el = document.createElement('div');
     el.className = 'me-dot';
-    state.meMarker = new maplibregl.Marker({ element: el });
+    el.innerHTML = '<svg viewBox="0 0 24 24"><use href="#i-car"/></svg>';
+    state.meMarker = new maplibregl.Marker({ element: el, rotationAlignment: 'map', pitchAlignment: 'viewport' });
   }
   state.meMarker.setLngLat(u.position).addTo(map);
   state.gps = { lon: u.position[0], lat: u.position[1] };
 
   const moving = u.speed != null && u.speed > 2 && u.heading != null && !Number.isNaN(u.heading);
+  if (moving) state.meMarker.setRotation(u.heading);
   map.easeTo({ center: u.position, zoom: 16, pitch: 50, bearing: moving ? u.heading : map.getBearing(), duration: 900 });
 
+  // Next turn: arrow, distance (big), instruction.
+  const [icon, left] = turnIcon(u.next);
+  $('nav-turn').querySelector('use').setAttribute('href', icon);
+  $('nav-turn').classList.toggle('left', left);
+  const [num, unit] = splitDist(fmtDist(u.toNext));
+  $('nav-dist').textContent = num;
+  $('nav-dist-unit').textContent = unit;
   $('nav-instruction').textContent = u.next.text;
-  const meta = (arrive) => `In ${fmtDist(u.toNext)} · ${fmtDist(u.remainingDist)} left · arrive ${fmtTime(arrive)}`;
-  $('nav-meta').textContent = meta(now() + u.remainingTime);
+
+  // Where you are right now: road and town.
+  const road = roadLabel(u.current);
+  state.navRoad = road;
+  renderNowOn();
+  updateTown({ lon: u.position[0], lat: u.position[1] });
+
+  const total = state.route.distance;
+  setGauge('gauge-progress', 0, u.along / total);
+  const show = (arrive) => {
+    $('nav-arrive').textContent = fmtTime(arrive);
+    $('nav-meta').textContent = `${fmtDist(u.remainingDist)} · ${fmtDuration(u.remainingTime)}`;
+  };
+  show(now() + u.remainingTime);
   if (!state.forecasts) return;
 
   // Re-run the weather timeline from where we are now. Times are shifted by the
@@ -1416,15 +1619,113 @@ function updateNavigation(u) {
   const behind = pts.filter((p) => p.dist <= u.along);
   const spent = behind.length ? behind[behind.length - 1].delay : 0;
   const dest = pts[pts.length - 1];
-  $('nav-meta').textContent = meta(now() + u.remainingTime + (dest.delay - spent));
+  show(now() + u.remainingTime + (dest.delay - spent));
+  $('nav-dest-wx').textContent = dest.wx ? `${dest.wx.icon} ${fmtTemp(dest.wx.temp)} at arrival` : '';
 
-  // Next notable weather ahead of us.
+  // Weather ahead stays dark until there's something worth knowing, then lights up.
   const ahead = pts.filter((p) => p.dist > u.along && p.wx);
-  const hazard = ahead.find((p) => p.wx.severity >= 2);
-  if (hazard) {
-    $('nav-weather').textContent = `${hazard.wx.icon} ${hazard.wx.label} in ${fmtDist(hazard.dist - u.along)} (~${fmtTime(hazard.eta - spent)})`;
-  } else if (dest.wx) {
-    $('nav-weather').textContent = `Clear driving ahead · ${dest.wx.icon} ${fmtTemp(dest.wx.temp)} at destination`;
+  const start = ahead.findIndex((p) => p.wx.severity >= 2);
+  if (start < 0) {
+    $('nav-alert').hidden = true;
+    setGauge('gauge-hazard', 0, 0);
+    return;
+  }
+  let end = start;
+  while (end + 1 < ahead.length && ahead[end + 1].wx.severity >= 2) end++;
+  const run = ahead.slice(start, end + 1);
+  const worst = run.reduce((a, p) => (p.wx.severity > a.wx.severity ? p : a), run[0]);
+  const first = run[0];
+  const last = run[run.length - 1];
+  const extra = [];
+  if (worst.wx.gusts >= 45) extra.push(`gusts ${fmtSpeed(worst.wx.gusts)}`);
+  if (worst.wx.visibility < 1000) extra.push(`visibility ${fmtDist(worst.wx.visibility)}`);
+  const when = first === last ? `~${fmtTime(first.eta - spent)}` : `${fmtTime(first.eta - spent)} – ${fmtTime(last.eta - spent)}`;
+  // The gauge always marks the stretch; the warning card only lights up once it's close.
+  setGauge('gauge-hazard', first.dist / total, Math.max(last.dist, first.dist + total * 0.02) / total);
+  const soon = first.dist - u.along < ALERT_WITHIN_M || first.eta - spent - now() < ALERT_WITHIN_S;
+  $('nav-alert').hidden = !soon;
+  if (!soon) return;
+  $('nav-alert').className = `nav-alert sev-${worst.wx.severity}`;
+  $('nav-alert-icon').textContent = worst.wx.icon;
+  $('nav-alert-title').textContent = `${worst.wx.label} in ${fmtDist(first.dist - u.along)}`;
+  $('nav-alert-detail').textContent = [when, ...extra].join(' · ');
+}
+
+// Show part of the gauge arc, from `from` to `to` (fractions of the trip).
+function setGauge(id, from, to) {
+  const a = Math.max(0, Math.min(100, from * 100));
+  const b = Math.max(a, Math.min(100, to * 100));
+  $(id).style.strokeDasharray = `0 ${a} ${b - a} 100`;
+}
+
+// Tick marks around the trip gauge, every 15°, longer every 45°.
+$('gauge-ticks').innerHTML = Array.from({ length: 13 }, (_, i) => {
+  const a = Math.PI + (i * Math.PI) / 12;
+  const r1 = 140;
+  const r2 = i % 3 === 0 ? 152 : 146;
+  const p = (r) => [150 + r * Math.cos(a), 150 + r * Math.sin(a)].map((n) => n.toFixed(1));
+  const [x1, y1] = p(r1);
+  const [x2, y2] = p(r2);
+  return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
+}).join('');
+
+function turnIcon(step) {
+  const { type, modifier = '' } = step.maneuver ?? {};
+  if (type === 'arrive') return ['#i-flag', false];
+  if (modifier.includes('uturn')) return ['#i-uturn', false];
+  if (modifier.includes('right')) return ['#i-turn-right', false];
+  if (modifier.includes('left')) return ['#i-turn-right', true];
+  return ['#i-straight', false];
+}
+
+// "0.4 mi" -> ["0.4", "mi"]
+function splitDist(text) {
+  const m = text.match(/^([\d.,]+)\s*(.*)$/);
+  return m ? [m[1], m[2]] : [text, ''];
+}
+
+// "Seattle, King County, Washington" -> "Seattle"
+function shortName(place) {
+  if (!place) return '';
+  return place.label === 'My location' ? 'Start' : place.label.split(',')[0];
+}
+
+// The road we're on, e.g. { badge: '518', road: 'SR 518' } or { badge: '', road: 'Main Street' }.
+function roadLabel(step) {
+  const ref = (step?.ref ?? '').split(';')[0].trim();
+  const name = (step?.name ?? '').trim();
+  return { badge: ref.match(/\d+[A-Z]?/)?.[0] ?? '', road: prettyRoad(name || ref) };
+}
+
+function renderNowOn() {
+  const { badge = '', road = '' } = state.navRoad ?? {};
+  const town = state.town;
+  $('now-on').hidden = !road && !town;
+  $('now-badge').hidden = !badge;
+  $('now-badge').textContent = badge;
+  $('now-road').hidden = !road;
+  $('now-road').textContent = road;
+  $('now-sep').hidden = !(road && town);
+  $('now-town').textContent = town;
+}
+
+// Look the town up again after ~800 m of driving, at most every 20 s, so we stay
+// well inside Photon's fair-use limits.
+async function updateTown(pos) {
+  const last = state.townLookup;
+  const t = Date.now();
+  if (last && (last.busy || t - last.at < 20000 || haversine([last.pos.lon, last.pos.lat], [pos.lon, pos.lat]) < 800)) return;
+  state.townLookup = { pos, at: t, busy: true };
+  try {
+    const place = await reverse(pos);
+    if (place && state.nav) {
+      state.town = place;
+      renderNowOn();
+    }
+  } catch {
+    // Keep showing the last town; the road name still updates.
+  } finally {
+    if (state.townLookup) state.townLookup.busy = false;
   }
 }
 
@@ -1436,7 +1737,8 @@ function stopNavigation() {
   state.meMarker?.remove();
   state.meMarker = null;
   document.body.classList.remove('navigating');
-  $('nav-banner').hidden = true;
+  $('nav-ui').hidden = true;
+  applyTheme();
   map.easeTo({ pitch: 0, bearing: 0 });
   if (state.route) fitRoute();
 }

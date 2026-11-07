@@ -134,7 +134,7 @@ function prepare(route) {
 function mainRoads(steps, total) {
   const byRoad = new Map();
   for (const s of steps) {
-    const road = (s.ref || s.name || '').split(';')[0].trim();
+    const road = prettyRoad((s.ref || s.name || '').split(';')[0].trim());
     if (road) byRoad.set(road, (byRoad.get(road) ?? 0) + s.distance);
   }
   return [...byRoad.entries()]
@@ -142,6 +142,11 @@ function mainRoads(steps, total) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 2)
     .map(([road]) => road);
+}
+
+// OSM writes Interstates as "I 5"; signs and people say "I-5".
+export function prettyRoad(road) {
+  return road.replace(/\bI (\d+)/g, 'I-$1');
 }
 
 export function haversine([lon1, lat1], [lon2, lat2]) {
@@ -176,7 +181,7 @@ const DIRECTIONS = ['north', 'northeast', 'east', 'southeast', 'south', 'southwe
 
 function instruction(step) {
   const { type, modifier, exit, bearing_after: bearing } = step.maneuver;
-  const road = step.name || step.ref || '';
+  const road = prettyRoad(step.name || step.ref || '');
   const onto = road ? ` onto ${road}` : '';
   const mod = modifier ? modifier.replace('uturn', 'U-turn') : '';
 

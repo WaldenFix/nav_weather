@@ -20,14 +20,17 @@ API keys, no accounts and no tracking.
 - **Official road reports (Washington):** WSDOT incidents, closures, construction and mountain pass conditions (road surface, chain and traction rules, temperature). They're shown in driving order with when you'll reach each one, and marked on the map. Add a free WSDOT access code in *Settings*; it's stored only on your device. The API supports JSONP, so this works from static hosting with no server.
 - A **departure-time slider** covering the next 72 hours. The app also suggests a departure time when another one looks noticeably calmer.
 - A live precipitation radar overlay.
-- Live navigation mode: it follows your GPS position, shows the next maneuver, warns about weather ahead and reroutes if you go off course.
-- **Storm chaser mode** (⛈️ button):
+- Live navigation mode: it follows your GPS position, shows the next maneuver and reroutes if you go off course.
+  - Shows **the road you're on and the town you're in** (road from the route, town looked up with Photon about every half mile).
+  - A trip gauge shows how far along you are, your arrival time and any bad-weather stretch ahead.
+  - A weather warning stays dark until bad weather is within about 40 miles or 45 minutes, then lights up.
+- **Storm chaser mode** (⛈️ Chase tab):
   - Scans the visible map area on a 9×9 grid for the next 12 hours. It scores thunderstorm potential from 0 to 100 using CAPE, lifted index, thunderstorm weather codes, rain chance and gusts.
   - Highlights the hotspots on the map and lists the best targets. Ones you can reach before the storms peak come first.
   - **Chase** routes you to a target and checks whether you'll arrive in time.
   - Turns on radar and loads active NWS tornado, severe thunderstorm and flash flood warnings, drawing warning polygons on the map (US only).
   - In this mode, route options are tagged *Most storms* instead of *Calmest*.
-- **Storm watcher mode** (🔭 button), for watching storms from a safe distance rather than chasing them:
+- **Storm watcher mode** (🔭 Watch tab), for watching storms from a safe distance rather than chasing them:
   - First it finds the strongest storms in view over the next 12 hours. Then it checks rings of possible viewing spots 20–50 km (12–30 mi) around each one.
   - A good spot is dry with low cloud overhead and good visibility. It sits *beside* the storm's path, using the 500 hPa winds to estimate where the storm is heading. By day it's better with the sun behind you. Slightly higher ground scores a little better.
   - Each spot is labeled **🌩️ Storm structure** (daylight) or **⚡ Lightning show** (after dark). It says when to be there, which way to look, how far away the storm is and which way it's moving. A dashed line on the map points from the spot to the storm.
@@ -42,6 +45,7 @@ API keys, no accounts and no tracking.
 - **Biased to you**: your GPS position, start and destination act as anchors. When a storm mode turns on, the map moves to them first. Targets near them rank higher, distances are measured from you, and place search prefers results near you.
 - **Radar legend**: shows what the colors mean (rain and snow intensity, not wind), using RainViewer's published color table.
 - °F/mi or °C/km units. On phones the panel becomes a bottom sheet.
+- **Themes**: Light, Dark (warm charcoal, easier on the eyes) and **Night**, an amber night-driving theme with the map dimmed to faint roads. *Auto* follows your phone's light/dark setting and switches to Night when you start navigating in the dark. The moon button switches Night on or off while you drive.
 
 ## Run it
 
