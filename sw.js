@@ -2,7 +2,7 @@
 // so it opens instantly from the home screen even on a weak connection.
 // Bump VERSION when the list of files changes.
 
-const VERSION = 'v5';
+const VERSION = 'v6';
 const SHELL = [
   './',
   'index.html',
@@ -15,6 +15,7 @@ const SHELL = [
   'js/roads.js',
   'js/route.js',
   'js/storm.js',
+  'js/viewpoint.js',
   'js/watch.js',
   'js/weather.js',
   'js/wmo.js',

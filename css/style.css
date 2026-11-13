@@ -742,21 +742,21 @@ input[type="text"] {
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 16px 18px;
-  border-radius: 22px;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 18px;
   background: var(--bg);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
 }
 
-.nav-turn { width: 44px; height: 44px; color: var(--accent); stroke-width: 2.5; filter: drop-shadow(var(--glow)); }
+.nav-turn { width: 34px; height: 34px; color: var(--accent); stroke-width: 2.5; filter: drop-shadow(var(--glow)); }
 .nav-turn.left { transform: scaleX(-1); }
 .nav-text { min-width: 0; }
 .nav-dist { display: flex; align-items: baseline; gap: 4px; }
-.nav-dist b { font-size: 46px; font-weight: 300; line-height: 1; text-shadow: var(--glow-text); font-variant-numeric: tabular-nums; }
-.nav-dist span { font-size: 16px; font-weight: 500; color: var(--fg-soft); }
-.nav-instruction { margin-top: 2px; font-size: 16px; font-weight: 500; }
+.nav-dist b { font-size: 34px; font-weight: 300; line-height: 1; text-shadow: var(--glow-text); font-variant-numeric: tabular-nums; }
+.nav-dist span { font-size: 14px; font-weight: 500; color: var(--fg-soft); }
+.nav-instruction { margin-top: 1px; font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .nav-tools {
   grid-column: 2;
@@ -783,19 +783,22 @@ input[type="text"] {
   grid-row: 2;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
-  border-radius: 18px;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 12px;
+  border-radius: 12px;
   background: var(--bg);
   border: 1.5px solid var(--sev-2);
-  box-shadow: var(--shadow), var(--glow-strong);
+  box-shadow: var(--shadow-float);
+  white-space: nowrap;
 }
+.nav-alert > div { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 .nav-alert.sev-3 { border-color: var(--sev-3); }
-.nav-alert .ic { font-size: 28px; line-height: 1; }
-.nav-alert b { display: block; font-size: 17px; color: var(--sev-1); }
+.nav-alert .ic { font-size: 18px; line-height: 1; }
+.nav-alert b { font-size: 14px; color: var(--sev-1); }
 :root[data-theme="light"] .nav-alert b { color: var(--fg); }
-.nav-alert small { display: block; margin-top: 2px; font-size: 12px; color: var(--fg-soft); }
+.nav-alert small { margin-left: 6px; font-size: 12px; color: var(--fg-soft); }
 
 .nav-bottom {
   position: absolute;
@@ -805,9 +808,9 @@ input[type="text"] {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 18px;
-  padding: 80px 16px calc(12px + env(safe-area-inset-bottom));
-  background: linear-gradient(to top, var(--nav-fade) 60%, transparent);
+  gap: 8px;
+  padding: 36px 16px calc(8px + env(safe-area-inset-bottom));
+  background: linear-gradient(to top, var(--nav-fade) 55%, transparent);
 }
 
 /* The road you're on and the town you're in. */
@@ -816,12 +819,12 @@ input[type="text"] {
   align-items: center;
   gap: 8px;
   max-width: 100%;
-  padding: 6px 12px 6px 6px;
-  border-radius: 12px;
+  padding: 4px 10px 4px 4px;
+  border-radius: 10px;
   background: var(--bg);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-float);
-  font-size: 14px;
+  font-size: 13px;
   white-space: nowrap;
 }
 
@@ -843,7 +846,7 @@ input[type="text"] {
 
 .gauge {
   position: relative;
-  width: min(340px, 100%);
+  width: min(220px, 62%);
 }
 
 .gauge svg { display: block; width: 100%; overflow: visible; }
@@ -857,21 +860,21 @@ input[type="text"] {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 22px;
+  bottom: 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
 }
 
-.gauge-read small { font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-soft); }
-.gauge-read b { font-size: 52px; font-weight: 300; line-height: 1.05; text-shadow: var(--glow-text); font-variant-numeric: tabular-nums; }
-.gauge-read span { font-size: 13px; color: var(--fg-soft); }
+.gauge-read small { display: none; font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-soft); }
+.gauge-read b { font-size: 30px; font-weight: 300; line-height: 1.05; text-shadow: var(--glow-text); font-variant-numeric: tabular-nums; }
+.gauge-read span { font-size: 12px; color: var(--fg-soft); }
 
 .gauge-ends {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: 2px;
   font-size: 11px;
   font-weight: 500;
   color: var(--fg-soft);
@@ -879,6 +882,8 @@ input[type="text"] {
 
 .gauge-ends span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gauge-ends span:nth-child(2) { text-align: center; flex: 1.4; }
+/* Start and destination names are on the route already; keep just arrival weather. */
+#nav-from, #nav-to { visibility: hidden; }
 .gauge-ends span:last-child { text-align: right; }
 
 body.navigating .panel,
@@ -948,6 +953,135 @@ body.navigating .attribution-note { display: none; }
   .radar-legend { bottom: auto; top: calc(64px + env(safe-area-inset-top)); left: 12px; right: auto; width: 200px; }
 
   .nav-top { width: calc(100% - 32px); }
-  .nav-dist b { font-size: 42px; }
+  .nav-dist b { font-size: 32px; }
   .attribution-note { display: none; }
 }
+
+/* ---------- Chase / Watch: compact header, "!" for alerts & safety ---------- */
+.sec-head { display: flex; align-items: center; gap: 8px; }
+.sec-head h2 { flex: 1; margin: 0; }
+.sec-head .segmented { flex: 1; margin: 0; }
+.chaser .sec-head .segmented { margin: 0; }
+
+.warn-btn {
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--fg-soft);
+  border-radius: 50%;
+  background: none;
+  color: var(--fg-soft);
+  font: 800 15px/1 var(--num, inherit);
+}
+.warn-btn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.warn-btn.hot { border-color: var(--sev-2); background: var(--sev-2); color: #fff; }
+.warn-btn.hot::after {
+  content: attr(data-count);
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 10px;
+  line-height: 16px;
+}
+.warn-box { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: var(--bg-soft); }
+.warn-box > :first-child { margin-top: 0; }
+.warn-box .hint { margin: 0 0 6px; }
+
+/* Tapping a spot or target picks it and plans the route; Go is in the footer. */
+.targets li { cursor: pointer; }
+.targets li.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.view-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0; font-size: 12px; }
+.view-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.vg { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.view-legend .vg { width: 16px; height: 16px; }
+
+.targets li.view-spot { display: block; }
+.vs-top { display: flex; align-items: center; gap: 8px; }
+.vs-top b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs-top small { color: var(--fg-soft); flex: none; }
+.vs-gust { margin-left: auto; flex: none; font-weight: 600; }
+.vs-read { display: block; margin: 4px 0 6px; color: var(--fg-soft); }
+.vs-strip { display: flex; gap: var(--gap, 2px); }
+.vs-strip i { flex: none; width: var(--cell, 6px); height: var(--h, 7px); border-radius: 1px; cursor: pointer; }
+.vs-strip i.night { opacity: 0.5; }
+.vs-strip i.arrive { outline: 1px solid var(--fg); outline-offset: 1px; opacity: 1; }
+.vs-strip i.picked { outline: 1px solid var(--accent); outline-offset: 1px; }
+.vs-extra { margin-top: 8px; }
+.vs-extra > small { color: var(--fg-soft); }
+.cams { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+.cams:empty { display: none; }
+.cams a { display: block; color: var(--fg-soft); font-size: 11px; text-decoration: none; }
+.cams img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: var(--bg-sunken); }
+.cams span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Departure time, above "Get route". */
+.leave-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-soft); }
+.leave-row .i { width: 18px; height: 18px; }
+.leave-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  color: var(--fg);
+  font: inherit;
+  color-scheme: light;
+}
+:root:not([data-theme="light"]) .leave-row input { color-scheme: dark; }
+.leave-row .chip { box-shadow: none; background: var(--bg-soft); padding: 7px 12px; }
+
+/* Middle of the visible map: where searches and scans look. */
+.crosshair {
+  --ch: #8a8a8a;
+  position: fixed;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 1.5px solid var(--ch);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.75;
+}
+:root:not([data-theme="light"]) .crosshair { --ch: #ffffff; opacity: 0.5; }
+.crosshair::before, .crosshair::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: var(--ch);
+}
+.crosshair::before { width: 1.5px; height: 26px; margin: -13px 0 0 -0.75px; }
+.crosshair::after { width: 26px; height: 1.5px; margin: -0.75px 0 0 -13px; }
+.crosshair i { position: absolute; left: 50%; top: 50%; width: 3px; height: 3px; margin: -1.5px; border-radius: 50%; background: var(--ch); }
+
+/* Phone sheet: drag the handle or header between peek, half and full screen. */
+@media (max-width: 700px) {
+  .handle-strip { box-sizing: content-box; padding: 10px 40px 6px; margin: 0 auto; background-clip: content-box; cursor: grab; }
+  .handle-strip, .panel-head { touch-action: none; }
+  .panel.full { height: calc(100% - env(safe-area-inset-top)); max-height: none; }
+  .panel.full .panel-body { flex: 1 1 auto; min-height: 0; }
+  .panel.full .mode-tabs { position: static; margin: 0 16px 10px; box-shadow: none; }
+}
+
+/* Small "try again" button after a failed scan. */
+.retry {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 6px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  color: var(--fg);
+}
+.retry .i { width: 14px; height: 14px; }

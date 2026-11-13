@@ -28,14 +28,18 @@ export async function reverse({ lat, lon }, signal) {
 }
 
 export async function search(query, bias, signal) {
-  const params = new URLSearchParams({ q: query, limit: '6' });
+  // Ask for extra results so US places can be moved to the top (Photon has no
+  // country filter), then keep the best six.
+  const params = new URLSearchParams({ q: query, limit: '15' });
   const lang = navigator.language?.slice(0, 2);
   if (['en', 'de', 'fr', 'it'].includes(lang)) params.set('lang', lang);
   if (bias) {
     params.set('lat', bias.lat.toFixed(4));
     params.set('lon', bias.lon.toFixed(4));
-    // Regional rather than street-level bias, so "Spokane" finds the city, not a nearby street.
-    params.set('zoom', '7');
+    // Regional rather than street-level bias, so "Spokane" finds the city, not a
+    // nearby street; wider still when the hint is just a zoomed-out map.
+    params.set('zoom', String(Math.round(Math.max(3, Math.min(7, bias.zoom ?? 7)))));
+    params.set('location_bias_scale', '0.4');
   }
   let res;
   try {
@@ -46,14 +50,20 @@ export async function search(query, bias, signal) {
   }
   if (!res.ok) throw new Error(`Place search failed (${res.status}). Try again in a minute.`);
   const data = await res.json();
-  return data.features.map((f) => {
+  const us = (f) => (f.properties.countrycode === 'US' ? 1 : 0);
+  // Stable sort: US results first, otherwise Photon's own order.
+  const features = data.features.map((f, i) => [f, i]).sort((a, b) => us(b[0]) - us(a[0]) || a[1] - b[1]).map(([f]) => f);
+  const seen = new Set();
+  return features.map((f) => {
     const p = f.properties;
     const street = [p.housenumber, p.street].filter(Boolean).join(' ');
     const title = p.name || street || p.city || 'Unnamed place';
-    const detail = [p.name ? street : '', p.city, p.state, p.country]
+    const isUS = p.countrycode === 'US';
+    const state = isUS ? US_STATES[p.state] ?? p.state : p.state;
+    const detail = [p.name ? street : '', p.city, state, isUS ? '' : p.country]
       .filter((x) => x && x !== title)
       .join(', ');
     const [lon, lat] = f.geometry.coordinates;
     return { title, detail, label: detail ? `${title}, ${detail}` : title, lat, lon };
-  });
+  }).filter((r) => !seen.has(r.label) && seen.add(r.label)).slice(0, 6);
 }

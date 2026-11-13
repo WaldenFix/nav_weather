@@ -31,6 +31,7 @@
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <symbol id="i-locate" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/></symbol>
     <symbol id="i-swap" viewBox="0 0 24 24"><path d="M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
     <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
@@ -51,11 +52,13 @@
   </svg>
 
   <div id="map"></div>
+  <!-- Where Chase and Watch look: the middle of the visible map. -->
+  <div id="crosshair" class="crosshair" hidden aria-hidden="true"><i></i></div>
 
   <aside id="panel" class="panel">
     <!-- On phones this is the sheet's handle, coloured with the trip's weather start to finish. -->
     <div class="handle-strip" id="handle-strip" aria-hidden="true"></div>
-    <header class="panel-head">
+    <header class="panel-head" id="panel-head">
       <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
         <rect class="logo-bg" width="64" height="64" rx="14"/>
         <path class="logo-mark" d="M20 44 L32 14 L44 44 L32 37 Z"/>
@@ -76,29 +79,42 @@
 
     <div class="panel-body">
       <section id="chaser" class="chaser" hidden>
-        <h2>Storm chaser</h2>
-        <p class="hint">Finds where thunderstorms are most likely in the next 12 hours, then routes you there in time.</p>
-        <button type="button" id="scan" class="primary">Scan this map area</button>
+        <div class="sec-head">
+          <h2>Storm chaser</h2>
+          <button type="button" class="warn-btn" data-box="chase-info" aria-expanded="false" title="Alerts &amp; safety" aria-label="Alerts and safety">!</button>
+        </div>
+        <div class="warn-box" id="chase-info" hidden>
+          <p class="hint">Where thunderstorms are most likely in the next 12 hours, around the crosshair. Tap one to route there.</p>
+          <div id="warnings" class="warnings"></div>
+          <p class="safety">⚠️ This is forecast guidance, not a warning system. Never drive into a hail core, rain-wrapped area or flooded road. Always keep an escape route and follow official NWS warnings.</p>
+        </div>
         <div id="scan-status" class="hint"></div>
         <ul id="targets" class="targets"></ul>
-        <div id="warnings" class="warnings"></div>
-        <p class="safety">⚠️ This is forecast guidance, not a warning system. Never drive into a hail core, rain-wrapped area or flooded road. Always keep an escape route and follow official NWS warnings.</p>
       </section>
 
       <section id="watcher" class="chaser" hidden>
-        <h2>Storm watcher</h2>
-        <div class="segmented" role="radiogroup" aria-label="What to watch">
-          <button type="button" role="radio" data-kind="thunder" aria-checked="true">⚡ Thunderstorms</button>
-          <button type="button" role="radio" data-kind="coast" aria-checked="false">🌊 Wind &amp; waves</button>
+        <div class="sec-head">
+          <div class="segmented" role="radiogroup" aria-label="What to watch">
+            <button type="button" role="radio" data-kind="view" aria-checked="true" title="Fog, clouds and wind at peaks and lookouts">Views</button>
+            <button type="button" role="radio" data-kind="thunder" aria-checked="false" title="A safe spot to watch a thunderstorm">Storms</button>
+            <button type="button" role="radio" data-kind="coast" aria-checked="false" title="Big surf and wind on the coast">Surf</button>
+          </div>
+          <button type="button" class="warn-btn" data-box="watch-info" aria-expanded="false" title="Alerts &amp; safety" aria-label="Alerts and safety">!</button>
         </div>
-        <p class="hint" data-for="thunder">Finds a safe, dry spot with a clear view of a storm: cloud structure by day, lightning after dark.</p>
-        <p class="hint" data-for="coast" hidden>Finds the best spot on the coast to watch big surf and wind, and the best time you can get there (next 36 hours).</p>
-        <button type="button" id="watch-scan" class="primary">Find viewing spots in this area</button>
+        <div class="warn-box" id="watch-info" hidden>
+          <div data-for="view">
+            <p class="hint">Peaks and lookouts around the crosshair: will you be in the fog, above it, or watching clouds roll past? Each square is an hour; tap one for detail.</p>
+            <div class="view-legend" id="view-legend"></div>
+          </div>
+          <p class="hint" data-for="thunder" hidden>A safe, dry spot with a clear view of a storm: cloud structure by day, lightning after dark.</p>
+          <p class="hint" data-for="coast" hidden>The best spot on the coast to watch big surf and wind, and the best time you can get there (next 36 hours).</p>
+          <div id="watch-warnings" class="warnings"></div>
+          <p class="safety" data-for="view">⛰️ Many summit roads close at night: check park hours before a pre-dawn run. In fog, slow right down on mountain roads and watch for cyclists. Gusts on exposed ridges can knock over a tripod: weigh it down.</p>
+          <p class="safety" data-for="thunder" hidden>⚡ Lightning can strike 10+ miles from a storm, out of clear sky. Watch from <strong>inside a hard-top car</strong>, not standing beside it. If you hear thunder, you're in range. Don't park under trees, on hilltops in the open, or in dips that can flood, and keep an escape route open behind you.</p>
+          <p class="safety" data-for="coast" hidden>🌊 Storm waves run far further up the beach than you expect, and "sneaker waves" come without warning. Watch from high ground or your car, <strong>never turn your back on the ocean</strong>, and stay off jetties, rocks and driftwood logs (waves roll them). In high wind, avoid parking under trees.</p>
+        </div>
         <div id="watch-status" class="hint"></div>
         <ul id="spots" class="targets"></ul>
-        <div id="watch-warnings" class="warnings"></div>
-        <p class="safety" data-for="thunder">⚡ Lightning can strike 10+ miles from a storm, out of clear sky. Watch from <strong>inside a hard-top car</strong>, not standing beside it. If you hear thunder, you're in range. Don't park under trees, on hilltops in the open, or in dips that can flood, and keep an escape route open behind you.</p>
-        <p class="safety" data-for="coast" hidden>🌊 Storm waves run far further up the beach than you expect, and "sneaker waves" come without warning. Watch from high ground or your car, <strong>never turn your back on the ocean</strong>, and stay off jetties, rocks and driftwood logs (waves roll them). In high wind, avoid parking under trees.</p>
       </section>
 
       <!-- Once a route is planned the form slides away, leaving this one line. Tap it to edit. -->
@@ -107,7 +123,7 @@
         <svg class="i chev" aria-hidden="true"><use href="#i-chevron"/></svg>
       </button>
       <div class="form-wrap" id="form-wrap">
-      <form id="route-form" autocomplete="off">
+      <form id="route-form" autocomplete="off" novalidate>
         <div class="trip-card">
           <div class="stop field">
             <span class="marker from" aria-hidden="true"></span>
@@ -138,6 +154,13 @@
           </div>
         </div>
 
+        <div class="leave-row">
+          <svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>
+          <label for="leave-at">Leave</label>
+          <input id="leave-at" type="datetime-local">
+          <button type="button" id="leave-now" class="chip" hidden>Now</button>
+        </div>
+
         <button type="submit" id="go" class="primary"><svg class="i" aria-hidden="true"><use href="#i-nav"/></svg>Get route &amp; weather</button>
       </form>
       </div>
@@ -160,7 +183,7 @@
           <div class="cl-scale">
             <i class="cl-best" id="best-mark" hidden title="Calmer time to leave"></i>
             <div class="cl-needle" id="needle"></div>
-            <input id="depart" type="range" min="0" max="72" step="0.25" value="0" aria-label="Leave time">
+            <input id="depart" type="range" min="0" max="72" step="any" value="0" aria-label="Leave time">
           </div>
           <button type="button" class="cl-set" id="set-depart" hidden>Set</button>
         </div>

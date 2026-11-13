@@ -1,7 +1,13 @@
 // Driving routes from an OSRM server (https://project-osrm.org).
 // Default is the FOSSGIS-hosted OSRM instance; swap ROUTER for your own server.
+// That OSRM profile leaves out car ferries, so Valhalla (also FOSSGIS-hosted,
+// asked for OSRM-shaped answers) is checked too and wins when a ferry is quicker,
+// e.g. Seattle to Bainbridge Island.
 
 const ROUTER = 'https://routing.openstreetmap.de/routed-car/route/v1/driving/';
+const VALHALLA = 'https://valhalla1.openstreetmap.de/route';
+// Rough wait to board a car ferry, only used when comparing against driving around.
+const FERRY_WAIT_S = 20 * 60;
 const MAX_OPTIONS = 4;
 const MAX_SLOWDOWN = 1.5; // drop alternatives more than 50% slower than the fastest
 
@@ -23,10 +29,35 @@ async function request(points, extra = {}) {
   return data.routes.map(prepare);
 }
 
+async function valhalla(points) {
+  const body = {
+    locations: points.map((p) => ({ lat: p.lat, lon: p.lon })),
+    costing: 'auto',
+    format: 'osrm',
+    shape_format: 'geojson',
+    directions_options: { units: 'kilometers' },
+  };
+  const res = await fetch(`${VALHALLA}?json=${encodeURIComponent(JSON.stringify(body))}`, { signal: AbortSignal.timeout(20000) });
+  if (!res.ok) throw new Error(`Routing failed (${res.status})`);
+  const data = await res.json();
+  if (data.code !== 'Ok' || !data.routes?.length) throw new Error('No route found between those places');
+  return data.routes.map(prepare);
+}
+
+// Time to compare routes by: ferries count their boarding wait.
+function compareTime(r) {
+  return r.duration + r.ferries * FERRY_WAIT_S;
+}
+
 // The fastest route through the given points (start, optional stops, destination).
 export async function getRoute(points) {
-  const [route] = await request(points);
-  return route;
+  const [o, v] = await Promise.allSettled([request(points), valhalla(points)]);
+  const road = o.value?.[0];
+  const ferry = v.value?.[0];
+  if (ferry?.ferries && (!road || compareTime(ferry) < road.duration * 0.97)) return ferry;
+  if (road) return road;
+  if (ferry) return ferry;
+  throw o.reason;
 }
 
 // Other reasonable ways to get there, e.g. I-40 instead of I-10. OSRM's own
@@ -36,7 +67,12 @@ export async function getAlternatives(from, to, known = []) {
   let found = [...known];
   const add = (routes) => { found = mergeRoutes(found, routes); };
 
-  add(await request([from, to], { alternatives: '3' }).catch(() => []));
+  const [osrm, val] = await Promise.all([
+    request([from, to], { alternatives: '3' }).catch(() => []),
+    valhalla([from, to]).catch(() => []),
+  ]);
+  add(osrm);
+  add(val.filter((r) => r.ferries)); // a ferry crossing vs driving around
   if (found.length < 2 && haversine([from.lon, from.lat], [to.lon, to.lat]) > 80000) {
     const nudged = await Promise.allSettled(corridorPoints(from, to).map((via) => getRoute([from, via, to])));
     add(nudged.filter((r) => r.status === 'fulfilled').map((r) => r.value));
@@ -50,10 +86,10 @@ export function mergeRoutes(existing, incoming) {
   for (const r of incoming) {
     if (!all.some((a) => overlap(a, r) > 0.85)) all.push(r);
   }
-  const fastest = Math.min(...all.map((r) => r.duration));
+  const fastest = Math.min(...all.map(compareTime));
   return all
-    .filter((r) => existing.includes(r) || r.duration <= fastest * MAX_SLOWDOWN)
-    .sort((a, b) => a.duration - b.duration)
+    .filter((r) => existing.includes(r) || compareTime(r) <= fastest * MAX_SLOWDOWN)
+    .sort((a, b) => compareTime(a) - compareTime(b))
     .slice(0, MAX_OPTIONS);
 }
 
@@ -114,7 +150,7 @@ function prepare(route) {
 
   let along = 0;
   const steps = raw.map((s) => {
-    const step = { ...s, startDist: along, text: s.via ? 'Continue through your stop' : instruction(s) };
+    const step = { ...s, startDist: along, ferry: s.mode === 'ferry', text: s.via ? 'Continue through your stop' : instruction(s) };
     along += s.distance;
     return step;
   });
@@ -127,6 +163,7 @@ function prepare(route) {
     roads: mainRoads(steps, route.distance),
     distance: route.distance,
     duration: route.duration,
+    ferries: steps.filter((s, i) => s.ferry && !steps[i - 1]?.ferry).length,
   };
 }
 
@@ -184,10 +221,14 @@ function instruction(step) {
   const road = prettyRoad(step.name || step.ref || '');
   const onto = road ? ` onto ${road}` : '';
   const mod = modifier ? modifier.replace('uturn', 'U-turn') : '';
+  if (step.mode === 'ferry') {
+    const name = (step.name || '').trim();
+    return `Take the ${name ? (/ferry/i.test(name) ? name : `${name} ferry`) : 'ferry'} (check sailing times)`;
+  }
 
   switch (type) {
     case 'depart':
-      return `Head ${DIRECTIONS[Math.round(bearing / 45) % 8]}${road ? ` on ${road}` : ''}`;
+      return `Head ${bearing == null ? 'out' : DIRECTIONS[Math.round(bearing / 45) % 8]}${road ? ` on ${road}` : ''}`;
     case 'arrive':
       return 'Arrive at your destination';
     case 'roundabout':

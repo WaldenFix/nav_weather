@@ -7,6 +7,7 @@ import { Navigator } from './nav.js';
 import { scanStorms, pickTargets, fetchWarnings, fetchLocalAlerts, windstorm, compass, STORM_EVENTS } from './storm.js';
 import { scanViewing } from './watch.js';
 import { scanCoast } from './coast.js';
+import { scanViews, hourAt, bestHour, nearbyCams, VIEW_KINDS } from './viewpoint.js';
 import { fetchWsdot, inWashington, onRoute, reportSeverity } from './roads.js';
 
 // OpenFreeMap: free, keyless vector tiles of OpenStreetMap (https://openfreemap.org).
@@ -41,7 +42,10 @@ const state = {
   radarOn: false,
   chaser: false,
   watcher: false,
-  watchKind: 'thunder', // storm watcher: 'thunder' or 'coast'
+  watchKind: 'view', // watcher: 'view' (fog & clouds at peaks), 'thunder' or 'coast'
+  leaveAt: null, // chosen departure (unix s); null = now
+  scanToken: 0,
+  spotSel: null, // selected watch spot / chase target index
   gps: null, // last known device position
   roads: null, // WSDOT { alerts, passes } for the current plan
   roadError: null,
@@ -132,7 +136,12 @@ mapReady.then(() => {
     type: 'circle',
     source: 'watch',
     filter: ['==', ['geometry-type'], 'Point'],
-    paint: { 'circle-color': '#7c3aed', 'circle-radius': 8, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 },
+    paint: {
+      'circle-color': ['coalesce', ['get', 'color'], '#7c3aed'],
+      'circle-radius': ['case', ['boolean', ['get', 'sel'], false], 11, 8],
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 2,
+    },
   });
 
   map.addSource('alts', { type: 'geojson', data: emptyFC() });
@@ -175,10 +184,7 @@ mapReady.then(() => {
     const p = e.features[0].properties;
     new maplibregl.Popup().setLngLat(e.lngLat).setText(p.headline).addTo(map);
   });
-  map.on('click', 'watch-spots', (e) => {
-    const spot = state.spots?.[e.features[0].properties.idx];
-    if (spot) new maplibregl.Popup().setLngLat(e.lngLat).setDOMContent(spotCard(spot)).addTo(map);
-  });
+  map.on('click', 'watch-spots', (e) => selectSpot(e.features[0].properties.idx));
   map.on('click', 'storm-grid', (e) => {
     const p = e.features[0].properties;
     new maplibregl.Popup().setLngLat(e.lngLat).setDOMContent(stormCard(JSON.parse(p.cell))).addTo(map);
@@ -435,9 +441,11 @@ function setPlace(which, place) {
   drawEndpoints();
 }
 
+// The middle of the part of the map you can see (not hidden by the panel).
 function mapCenter() {
-  const c = map.getCenter();
-  return { lat: c.lat, lon: c.lng };
+  const [x, y] = focusPx();
+  const c = map.unproject([x, y]);
+  return { lat: c.lat, lon: c.lng, zoom: map.getZoom() };
 }
 
 $('locate').addEventListener('click', async () => {
@@ -476,7 +484,11 @@ $('route-form').addEventListener('submit', (e) => {
   planRoute();
 });
 
-$('collapse').addEventListener('click', () => $('panel').classList.toggle('collapsed'));
+$('collapse').addEventListener('click', () => {
+  if (phone.matches) snapSheet(sheetState() === 'peek' ? 'half' : 'peek');
+  else $('panel').classList.toggle('collapsed');
+  placeCrosshair();
+});
 
 // After a route is planned the form slides away, leaving a one-line "From → To"
 // strip; tapping the strip slides the form back for editing.
@@ -504,6 +516,7 @@ $('depart').addEventListener('input', () => {
 });
 $('set-depart').addEventListener('click', () => {
   state.departOffset = Number($('depart').value);
+  setLeaveAt(state.departOffset ? state.baseTime + state.departOffset * 3600 : null, false);
   if (state.forecasts) render();
 });
 
@@ -513,7 +526,7 @@ function departAt() {
 
 function ghostOffset() {
   const g = Number($('depart').value);
-  return g === state.departOffset ? null : g;
+  return Math.abs(g - state.departOffset) < 0.01 ? null : g;
 }
 
 function updateDepartLabel() {
@@ -608,6 +621,10 @@ async function planRoute() {
 
     showStatus('Getting forecasts along the route…');
     state.baseTime = now();
+    if (state.leaveAt) {
+      state.departOffset = leaveOffset();
+      $('depart').value = state.departOffset;
+    }
     const option = await buildOption(route);
     await mapReady;
     if (token !== state.planToken) return;
@@ -842,7 +859,7 @@ function renderOptions(t0) {
       + ` · ${fmtDist(o.route.distance)} · ${fmtDuration(s.time)} · worst weather: ${SEVERITY_LABEL[s.worst].toLowerCase()}`
       + (s.storms ? ` · ${s.storms} storm point${s.storms > 1 ? 's' : ''}` : '');
     btn.innerHTML = `${signSvg(s.worst)}<div><b></b><span></span></div>`;
-    btn.querySelector('b').textContent = o.route.roads[0] ?? `Route ${i + 1}`;
+    btn.querySelector('b').textContent = `${o.route.ferries ? '⛴ ' : ''}${o.route.roads[0] ?? (o.route.ferries ? 'Ferry' : `Route ${i + 1}`)}`;
     btn.querySelector('span').textContent = i !== fastest && extra >= 120 ? `+${hoursMinutes(extra)}` : hoursMinutes(s.time);
     btn.addEventListener('click', () => selectOption(i));
     return btn;
@@ -1165,8 +1182,11 @@ function renderBestTime(t0) {
 // Chaser and watcher are two takes on the same storms, so only one is on at a time.
 // They share the radar, the storm-potential map layer and the NWS warnings.
 document.querySelectorAll('.mode-tabs button').forEach((btn) => btn.addEventListener('click', () => setMode(btn.dataset.mode || null)));
-$('scan').addEventListener('click', scanArea);
-$('watch-scan').addEventListener('click', scanViewArea);
+document.querySelectorAll('.warn-btn').forEach((btn) => btn.addEventListener('click', () => {
+  const box = $(btn.dataset.box);
+  box.hidden = !box.hidden;
+  btn.setAttribute('aria-expanded', String(!box.hidden));
+}));
 
 function setMode(mode) {
   state.chaser = mode === 'chaser';
@@ -1177,6 +1197,9 @@ function setMode(mode) {
   $('panel').classList.remove('collapsed');
   state.targets = null;
   state.spots = null;
+  state.spotSel = null;
+  lastScan = null;
+  placeCrosshair();
   if (state.target && state.target.kind !== (state.chaser ? 'chase' : 'watch')) state.target = null;
 
   mapReady.then(() => {
@@ -1217,11 +1240,14 @@ async function focusOnAnchors() {
   if (!pts.length) return;
   const bounds = new maplibregl.LngLatBounds();
   pts.forEach((p) => bounds.extend([p.lon, p.lat]));
-  // Single place, or places close together: show ~150 km around them.
-  const pad = 1.4;
+  // Single place, or places close together: show ~150 km around them (~20 km
+  // for viewpoints, which are about local peaks). Keep it clear of the panel.
+  const pad = state.watcher && state.watchKind === 'view' ? 0.2 : 1.4;
   bounds.extend([bounds.getWest() - pad, bounds.getSouth() - pad]);
   bounds.extend([bounds.getEast() + pad, bounds.getNorth() + pad]);
-  map.fitBounds(bounds, { padding: 40, maxZoom: 9, duration: 0 });
+  const [, , r] = focusPx();
+  const padding = { top: r.t + 40, left: r.l + 40, right: window.innerWidth - r.r + 40, bottom: window.innerHeight - r.b + 40 };
+  map.fitBounds(bounds, { padding, maxZoom: 11, duration: 0 });
 }
 
 // Quietly pick up the GPS position at start-up if the user has already allowed it.
@@ -1233,8 +1259,9 @@ navigator.permissions?.query({ name: 'geolocation' }).then((p) => {
 // Roughly what's on screen: a 100–600 km radius around the map centre.
 function scanRadius() {
   const center = mapCenter();
-  const bounds = map.getBounds();
-  const halfWidth = haversine([center.lon, center.lat], [bounds.getEast(), center.lat]) / 1000;
+  const [, y, r] = focusPx();
+  const edge = map.unproject([r.r, y]);
+  const halfWidth = haversine([center.lon, center.lat], [edge.lng, edge.lat]) / 1000;
   return { center, radius: Math.round(Math.min(600, Math.max(100, halfWidth))) };
 }
 
@@ -1254,39 +1281,41 @@ async function scanArea() {
   const { center, radius } = scanRadius();
   const origin = originPoint(center);
 
-  $('scan').disabled = true;
-  $('scan-status').textContent = `Scanning ${fmtDist(radius * 1000)} around the map centre for the next 12 hours…`;
+  const token = ++state.scanToken;
+  lastScan = { center, radius };
+  $('scan-status').textContent = `Scanning ${fmtDist(radius * 1000)} around the crosshair…`;
   try {
     const cells = await scanStorms(center, radius);
-    if (!state.chaser) return;
+    if (!state.chaser || token !== state.scanToken) return;
+    state.spotSel = null;
     state.targets = pickTargets(cells, origin, radius, { anchors: anchors() });
     drawStormCells(cells);
     $('scan-status').textContent = state.targets.length
       ? `Best storm potential within ${fmtDist(radius * 1000)} (distances ${fromLabel()}):`
-      : `No thunderstorm potential within ${fmtDist(radius * 1000)} in the next 12 hours.${windNote(cells, center) || ' Zoom out or move the map, then scan again.'}`;
+      : `No thunderstorm potential within ${fmtDist(radius * 1000)} in the next 12 hours.${windNote(cells, center) || ' Zoom out or move the map.'}`;
     renderTargets();
   } catch (err) {
-    $('scan-status').textContent = err.message;
-  } finally {
-    $('scan').disabled = false;
+    if (token === state.scanToken) scanFailed('scan-status', err, scanArea);
   }
 }
 
 function renderTargets() {
-  $('targets').replaceChildren(...state.targets.map((t) => {
+  $('targets').replaceChildren(...state.targets.map((t, i) => {
     const li = document.createElement('li');
-    li.className = `sev-${t.level.sev}`;
+    li.className = `sev-${t.level.sev}${state.spotSel === i ? ' sel' : ''}`;
+    li.tabIndex = 0;
     const info = document.createElement('div');
     info.textContent = `${t.icon} ${t.level.label} · ${t.score}/100`;
     const small = document.createElement('small');
     small.textContent = `Peaks ~${fmtDayTime(t.time)} · ${fmtDist(t.dist)} ${t.bearing}${t.cape ? ` · CAPE ${Math.round(t.cape)}` : ''}`
       + (t.reachable ? '' : ' · probably too far to reach in time');
     info.append(small);
-    const btn = document.createElement('button');
-    btn.textContent = 'Chase';
-    btn.addEventListener('click', () => chase(t));
-    li.append(info, btn);
-    li.addEventListener('mouseenter', () => map.easeTo({ center: [t.lon, t.lat], duration: 400 }));
+    li.append(info);
+    li.addEventListener('click', () => {
+      state.spotSel = i;
+      renderTargets();
+      chase(t);
+    });
     return li;
   }));
 }
@@ -1324,8 +1353,8 @@ async function chase(target) {
 
 function goTo(target) {
   state.target = target;
-  state.departOffset = 0;
-  $('depart').value = 0;
+  state.departOffset = leaveOffset();
+  $('depart').value = state.departOffset;
   planRoute();
 }
 
@@ -1336,6 +1365,7 @@ document.querySelectorAll('#watcher .segmented button').forEach((btn) => btn.add
   document.querySelectorAll('#watcher .segmented button').forEach((b) => b.setAttribute('aria-checked', String(b === btn)));
   document.querySelectorAll('#watcher [data-for]').forEach((el) => { el.hidden = el.dataset.for !== state.watchKind; });
   if (state.target?.kind === 'watch') state.target = null;
+  state.spotSel = null;
   scanViewArea();
 }));
 
@@ -1343,24 +1373,23 @@ async function scanViewArea() {
   await mapReady;
   const { center, radius } = scanRadius();
   const kind = state.watchKind;
-  $('watch-scan').disabled = true;
-  $('spots').replaceChildren();
-  map.getSource('watch').setData(emptyFC());
+  const token = ++state.scanToken;
+  lastScan = { center, radius };
   try {
-    if (kind === 'coast') await scanCoastArea(center, radius);
-    else await scanThunderArea(center, radius);
+    if (kind === 'view') await scanViewpoints(center, radius, token);
+    else if (kind === 'coast') await scanCoastArea(center, radius, token);
+    else await scanThunderArea(center, radius, token);
   } catch (err) {
-    $('watch-status').textContent = err.message;
-  } finally {
-    $('watch-scan').disabled = false;
+    if (token === state.scanToken) scanFailed('watch-status', err, scanViewArea);
   }
 }
 
-async function scanCoastArea(center, radius) {
-  $('watch-status').textContent = `Looking for big surf and wind along the coast within ${fmtDist(radius * 1000)} over the next 36 hours…`;
+async function scanCoastArea(center, radius, token) {
+  $('watch-status').textContent = `Looking for big surf and wind within ${fmtDist(radius * 1000)}…`;
   const { cells, spots, noCoast } = await scanCoast(center, radius, { anchors: anchors(), origin: originPoint(center) });
-  if (!state.watcher || state.watchKind !== 'coast') return;
+  if (!state.watcher || state.watchKind !== 'coast' || token !== state.scanToken) return;
   state.spots = spots;
+  state.spotSel = null;
   drawStormCells(cells);
   map.getSource('watch').setData({
     type: 'FeatureCollection',
@@ -1369,16 +1398,17 @@ async function scanCoastArea(center, radius) {
   $('watch-status').textContent = spots.length
     ? `Best coastal spots (distances ${fromLabel()}):`
     : noCoast
-      ? 'No coastline in view. Move the map over a coast and scan again.'
+      ? 'No coastline in view. Move the map over a coast.'
       : `No big surf or strong wind on this coast in the next 36 hours.`;
   renderSpots();
 }
 
-async function scanThunderArea(center, radius) {
-  $('watch-status').textContent = `Looking for storms and viewing spots within ${fmtDist(radius * 1000)} over the next 12 hours…`;
+async function scanThunderArea(center, radius, token) {
+  $('watch-status').textContent = `Looking for storms and viewing spots within ${fmtDist(radius * 1000)}…`;
   const { cells, spots } = await scanViewing(center, radius, { origin: originPoint(center), anchors: anchors() });
-  if (!state.watcher || state.watchKind !== 'thunder') return;
+  if (!state.watcher || state.watchKind !== 'thunder' || token !== state.scanToken) return;
   state.spots = spots;
+  state.spotSel = null;
   drawStormCells(cells);
   map.getSource('watch').setData({
     type: 'FeatureCollection',
@@ -1392,8 +1422,8 @@ async function scanThunderArea(center, radius) {
   $('watch-status').textContent = spots.length
     ? `Best viewing spots (distances ${fromLabel()}):`
     : strongest >= 40
-      ? 'There are storms around, but no dry spot with a clear view of them. Try zooming out and scanning again.'
-      : `No thunderstorms worth watching within ${fmtDist(radius * 1000)} in the next 12 hours.${wind ? `${wind} Try "🌊 Wind & waves" above.` : ' Zoom out or move the map, then scan again.'}`;
+      ? 'There are storms around, but no dry spot with a clear view of them. Try zooming out.'
+      : `No thunderstorms worth watching within ${fmtDist(radius * 1000)} in the next 12 hours.${wind ? `${wind} Try Surf above.` : ' Zoom out or move the map.'}`;
   renderSpots();
 }
 
@@ -1413,39 +1443,20 @@ function spotDetail(s) {
 }
 
 function renderSpots() {
-  $('spots').replaceChildren(...state.spots.map((s) => {
+  if (state.spots?.[0]?.show === 'view') return renderViews();
+  $('spots').replaceChildren(...state.spots.map((s, i) => {
     const li = document.createElement('li');
-    li.className = `sev-${s.level.sev}`;
+    li.className = `sev-${s.level.sev}${state.spotSel === i ? ' sel' : ''}`;
+    li.tabIndex = 0;
     const info = document.createElement('div');
     info.textContent = spotSummary(s).title;
     const small = document.createElement('small');
     small.textContent = spotDetail(s) + (s.reachable ? '' : ' · probably too far to reach in time');
     info.append(small);
-    const btn = document.createElement('button');
-    btn.textContent = 'Go';
-    btn.addEventListener('click', () => watchFrom(s));
-    li.append(info, btn);
-    li.addEventListener('mouseenter', () => map.easeTo({ center: [s.lon, s.lat], duration: 400 }));
+    li.append(info);
+    li.addEventListener('click', () => selectSpot(i));
     return li;
   }));
-}
-
-// Storms typically move at roughly 70% of the 500 hPa wind speed.
-function spotCard(s) {
-  if (s.show === 'waves') {
-    return card([
-      spotSummary(s).title,
-      `Best around ${fmtDayTime(s.time)}`,
-      `Waves ${fmtHeight(s.waveHeight)}, every ${Math.round(s.period)} s`,
-      `Gusts ${fmtSpeed(s.gusts)} from the ${compassName(s.windFrom)}`,
-    ]);
-  }
-  return card([
-    spotSummary(s).title,
-    `Best around ${fmtDayTime(s.time)}`,
-    `Look ${s.look}: storm ${fmtDist(s.stormKm * 1000)} away${s.moving ? `, moving ${s.moving}${s.speedKmh ? ` at ~${fmtSpeed(s.speedKmh * 0.7)}` : ''}` : ''}`,
-    s.show === 'lightning' ? 'After dark, so lightning is the show' : 'Daylight, so cloud structure is the show',
-  ]);
 }
 
 async function watchFrom(spot) {
@@ -1459,7 +1470,8 @@ async function watchFrom(spot) {
     }
   }
   setPlace('via', null);
-  setPlace('to', { lat: spot.lat, lon: spot.lon, label: `Viewing spot · ${spotSummary(spot).show}` });
+  const label = spot.show === 'view' ? spot.name : `Viewing spot · ${spotSummary(spot).show}`;
+  setPlace('to', { lat: spot.lat, lon: spot.lon, label });
   goTo({ ...spot, kind: 'watch' });
 }
 
@@ -1476,7 +1488,13 @@ function renderIntercept(pts) {
   const diff = arrive - t.time;
   let text;
   let late = false;
-  if (t.kind === 'watch' && t.show === 'waves') {
+  if (t.kind === 'watch' && t.show === 'view') {
+    const at = hourAt(t, arrive);
+    const best = bestHour(t, arrive, 12);
+    text = `You arrive ${fmtTime(arrive)}: ${VIEW_KINDS[at.kind].label.toLowerCase()}, gusts ${fmtSpeed(at.gusts)}.`;
+    if (best && best.kind !== at.kind && best.score > at.score + 5) text += ` Better ${fmtDayTime(best.time)}: ${VIEW_KINDS[best.kind].label.toLowerCase()}.`;
+    late = at.score < 30;
+  } else if (t.kind === 'watch' && t.show === 'waves') {
     const what = `waves ${fmtHeight(t.waveHeight)}, gusts ${fmtSpeed(t.gusts)}`;
     if (diff <= 0) text = `🌊 You arrive ${fmtTime(arrive)}, before the peak around ${fmtDayTime(t.time)} (${what}).`;
     else if (diff <= 3600) text = `🌊 You arrive ${fmtTime(arrive)}, just after the peak (${fmtTime(t.time)}, ${what}).`;
@@ -1507,6 +1525,7 @@ function renderIntercept(pts) {
 // (wind, surf, flood, winter…) covering the area on screen.
 async function loadWarnings(boxId) {
   const box = $(boxId);
+  const btn = document.querySelector(`.warn-btn[data-box="${box.closest('.warn-box').id}"]`);
   const line = (text, strong = false) => {
     const el = document.createElement(strong ? 'strong' : 'div');
     el.textContent = text;
@@ -1536,6 +1555,11 @@ async function loadWarnings(boxId) {
   }
 
   const others = local.status === 'fulfilled' ? local.value.filter((a) => !STORM_EVENTS.includes(a.event)) : [];
+  // The "!" button carries the count of alerts covering this area.
+  const here = local.status === 'fulfilled' ? local.value.length : 0;
+  btn.classList.toggle('hot', here > 0);
+  btn.dataset.count = here || '';
+  btn.title = here ? `${here} alert${here > 1 ? 's' : ''} here · safety` : 'Alerts & safety';
   if (others.length) {
     line('Other alerts around this area:', true);
     for (const a of others.slice(0, 6)) line(`${a.event}: ${a.area}`);
@@ -1568,6 +1592,7 @@ $('stop-nav').addEventListener('click', stopNavigation);
 function startNavigation() {
   if (!state.route) return;
   state.departOffset = 0;
+  setLeaveAt(null, false);
   state.baseTime = now();
   $('depart').value = 0;
   // Commit to the chosen route; alternatives are hidden while driving.
@@ -1584,6 +1609,7 @@ function startNavigation() {
     $('panel').classList.remove('leaving');
   }, 350);
   $('nav-ui').hidden = false;
+  placeCrosshair();
   $('nav-dist').textContent = '';
   $('nav-dist-unit').textContent = '';
   $('nav-instruction').textContent = 'Waiting for GPS…';
@@ -1807,6 +1833,7 @@ function stopNavigation() {
   $('panel').classList.add('returning');
   $('panel').addEventListener('animationend', () => $('panel').classList.remove('returning'), { once: true });
   $('nav-ui').hidden = true;
+  placeCrosshair();
   applyTheme();
   map.easeTo({ pitch: 0, bearing: 0 });
   if (state.route) fitRoute();
@@ -1910,3 +1937,402 @@ function fmtDayTime(t) {
 function startOfDay(d) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
+
+// ---------------------------------------------------------------- viewpoints (Watch ⛰️)
+
+// One small shape per kind of view, drawn in that kind's colour.
+const VIEW_COLORS = { sea: '#a855f7', rolling: '#14b8a6', skim: '#0ea5e9', under: '#64748b', clear: '#16a34a', fog: '#9ca3af', rain: '#3b82f6' };
+const VIEW_GLYPHS = {
+  sea: '<path d="M7 13l5-8 5 8z" fill="currentColor"/><path d="M3 17c3-2 5 2 9 0s6 2 9 0M3 21c3-2 5 2 9 0s6 2 9 0"/>',
+  rolling: '<path d="M7 18a4 4 0 0 1 .5-8A5.5 5.5 0 0 1 18 10a4 4 0 0 1 0 8z"/><path d="M2 21h8M14 21h8"/>',
+  skim: '<path d="M6 21l6-9 6 9z" fill="currentColor"/><path d="M4 8h16M7 4h10"/>',
+  under: '<path d="M3 4h18M3 21h18"/><path d="M8 17l4-7 4 7z" fill="currentColor"/>',
+  clear: '<circle cx="12" cy="12" r="6"/>',
+  fog: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  rain: '<path d="M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z" fill="currentColor"/>',
+};
+function viewGlyph(kind) {
+  return `<svg class="vg" viewBox="0 0 24 24" aria-hidden="true" style="color:${VIEW_COLORS[kind]}">${VIEW_GLYPHS[kind]}</svg>`;
+}
+
+$('view-legend').innerHTML = Object.entries(VIEW_KINDS).map(([k, v]) => `<span>${viewGlyph(k)}${v.label}</span>`).join('');
+
+async function scanViewpoints(center, radius, token) {
+  $('watch-status').textContent = 'Checking peaks and lookouts around the crosshair…';
+
+  const spots = await scanViews(center, radius);
+  if (!state.watcher || state.watchKind !== 'view' || token !== state.scanToken) return;
+  state.spots = spots.filter((s) => s.hours.length).map((s) => ({ ...s, show: 'view' }));
+  state.spotSel = null;
+  drawStormCells([]);
+  rankViews();
+  $('watch-status').textContent = state.spots.length
+    ? (radius > 30 ? 'Zoom in to check other peaks.' : '')
+    : 'No forecast for this area right now.';
+  renderSpots();
+}
+
+// When you'd get to a spot if you leave at the chosen time (rough mountain-road pace).
+function arriveAtSpot(s) {
+  const origin = state.gps ?? state.from;
+  const leave = state.leaveAt ?? now();
+  if (!origin) return leave;
+  return leave + (haversine([origin.lon, origin.lat], [s.lon, s.lat]) * 1.3) / 20;
+}
+
+// Each spot's view when you'd arrive and its best hour after that; best first.
+function rankViews() {
+  for (const s of state.spots) {
+    s.eta = arriveAtSpot(s);
+    s.at = hourAt(s, s.eta);
+    s.best = bestHour(s, s.eta);
+    s.time = s.at.time;
+  }
+  const sel = state.spots[state.spotSel];
+  state.spots.sort((a, b) => b.at.score - a.at.score || b.best.score - a.best.score);
+  state.spotSel = sel ? state.spots.indexOf(sel) : null;
+}
+
+function drawViewSpots() {
+  map.getSource('watch').setData({
+    type: 'FeatureCollection',
+    features: state.spots.map((s, idx) => ({
+      type: 'Feature',
+      properties: { idx, color: VIEW_COLORS[s.at.kind], sel: idx === state.spotSel },
+      geometry: { type: 'Point', coordinates: [s.lon, s.lat] },
+    })),
+  });
+}
+
+function renderViews() {
+  drawViewSpots();
+  $('spots').replaceChildren(...state.spots.map((s, i) => {
+    const li = document.createElement('li');
+    li.className = `view-spot${state.spotSel === i ? ' sel' : ''}`;
+    li.style.borderLeftColor = VIEW_COLORS[s.at.kind];
+    li.tabIndex = 0;
+
+    const top = document.createElement('div');
+    top.className = 'vs-top';
+    top.innerHTML = viewGlyph(s.at.kind);
+    const name = document.createElement('b');
+    name.textContent = s.name;
+    const ele = document.createElement('small');
+    ele.textContent = fmtElevation(Math.round(s.ele * 3.28084));
+    const gust = document.createElement('span');
+    gust.className = 'vs-gust num';
+    gust.textContent = `💨${fmtSpeed(s.at.gusts)}`;
+    gust.title = 'Gusts when you arrive';
+    top.append(name, ele, gust);
+
+    const read = document.createElement('small');
+    read.className = 'vs-read';
+    const line = (h, lead) => `${lead} ${fmtDayTime(h.time)}: ${VIEW_KINDS[h.kind].label.toLowerCase()}`;
+    read.textContent = line(s.at, 'Arrive')
+      + (s.best.kind !== s.at.kind && s.best.score > s.at.score + 5 ? ` · best ${line(s.best, '').trim()}` : '');
+
+    // Hour strip: one square per hour from now, coloured by the view; the hour you'd
+    // arrive is outlined. Tap a square for that hour.
+    const strip = document.createElement('div');
+    strip.className = 'vs-strip';
+    const from = now() - 1800;
+    s.hours.filter((h) => h.time >= from).slice(0, 30).forEach((h) => {
+      const c = document.createElement('i');
+      c.style.background = VIEW_COLORS[h.kind];
+      if (!h.day) c.className = 'night';
+      if (h.time === s.at.time) c.classList.add('arrive');
+      c.title = `${fmtDayTime(h.time)} · ${VIEW_KINDS[h.kind].label} · gusts ${fmtSpeed(h.gusts)}`;
+      c.addEventListener('click', (e) => {
+        e.stopPropagation();
+        read.textContent = `${fmtDayTime(h.time)}: ${VIEW_KINDS[h.kind].label.toLowerCase()} · gusts ${fmtSpeed(h.gusts)} · ${fmtTemp(h.temp)}`
+          + (h.visibility < 5000 ? ` · see ${fmtDist(h.visibility)}` : '');
+        strip.querySelectorAll('i').forEach((x) => x.classList.toggle('picked', x === c));
+      });
+      strip.append(c);
+    });
+
+    li.append(top, read, strip);
+    if (state.spotSel === i) li.append(spotExtras(s));
+    li.addEventListener('click', () => selectSpot(i));
+    return li;
+  }));
+  sizeStrips();
+}
+
+// Hour squares and the gaps between them are whole screen pixels, so every gap
+// looks the same at any display scaling.
+function sizeStrips() {
+  const dpr = devicePixelRatio || 1;
+  const px = (n) => Math.max(1, Math.round(n * dpr)) / dpr;
+  for (const strip of document.querySelectorAll('.vs-strip')) {
+    const n = strip.childElementCount;
+    if (!n) continue;
+    const gap = px(2);
+    const cell = Math.max(1, Math.floor(((strip.clientWidth - gap * (n - 1)) * dpr) / n)) / dpr;
+    strip.style.setProperty('--gap', `${gap}px`);
+    strip.style.setProperty('--cell', `${cell}px`);
+    strip.style.setProperty('--h', `${px(7)}px`);
+  }
+}
+addEventListener('resize', sizeStrips);
+
+// Sunrise and live webcams near the selected spot.
+function spotExtras(s) {
+  const box = document.createElement('div');
+  box.className = 'vs-extra';
+  const sunrise = s.sunrise.find((t) => t > (state.leaveAt ?? now()));
+  if (sunrise) {
+    const sun = document.createElement('small');
+    sun.textContent = `☀ Sunrise ${fmtDayTime(sunrise)}`;
+    box.append(sun);
+  }
+  const cams = document.createElement('div');
+  cams.className = 'cams';
+  box.append(cams);
+  nearbyCams(s).then((list) => {
+    cams.replaceChildren(...list.map((c) => {
+      const a = document.createElement('a');
+      a.href = c.full;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.title = `${c.name} · ${fmtDist(c.dist)} away${c.look != null ? ` · looking ${compassName(c.look)}` : ''}`;
+      a.addEventListener('click', (e) => e.stopPropagation());
+      const img = document.createElement('img');
+      img.src = `${c.thumb}?t=${Math.floor(Date.now() / 60000)}`;
+      img.alt = c.name;
+      img.loading = 'lazy';
+      const cap = document.createElement('span');
+      cap.textContent = c.look != null ? `${c.name} ${['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'][Math.round(c.look / 45) % 8]}` : c.name;
+      a.append(img, cap);
+      return a;
+    }));
+  });
+  return box;
+}
+
+// Tapping a spot (in the list or on the map) picks it and routes there; the
+// route's Go button then starts the drive.
+function selectSpot(i) {
+  const spot = state.spots?.[i];
+  if (!spot) return;
+  state.spotSel = i;
+  renderSpots();
+  watchFrom(spot);
+}
+
+// ---------------------------------------------------------------- leave time
+
+function toLocalInput(t) {
+  const d = new Date(t * 1000);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+
+// While "Leave" is left at now, keep it showing the current time.
+setInterval(() => {
+  if (!state.leaveAt && document.activeElement !== $('leave-at')) $('leave-at').value = toLocalInput(now());
+}, 30000);
+
+// Hours from the plan's base time to the chosen departure (0 = now).
+function leaveOffset() {
+  if (!state.leaveAt) return 0;
+  return Math.max(0, Math.min(MAX_DEPART_HOURS, (state.leaveAt - now()) / 3600));
+}
+
+function setLeaveAt(t, apply = true) {
+  state.leaveAt = t && t > now() + 300 ? t : null;
+  $('leave-at').value = toLocalInput(state.leaveAt ?? now());
+  $('leave-now').hidden = !state.leaveAt;
+  if (!apply) return;
+  if (state.watcher && state.spots?.[0]?.show === 'view') {
+    rankViews();
+    renderSpots();
+  }
+  if (state.route && !state.nav) {
+    state.baseTime = now();
+    state.departOffset = leaveOffset();
+    $('depart').value = state.departOffset;
+    render();
+  }
+}
+
+$('leave-at').addEventListener('change', () => {
+  const v = $('leave-at').value;
+  setLeaveAt(v ? Math.floor(new Date(v).getTime() / 1000) : null);
+});
+$('leave-now').addEventListener('click', () => setLeaveAt(null));
+setLeaveAt(null, false);
+
+// A failed scan says so briefly, with a small button to try again.
+function scanFailed(id, err, retry) {
+  const offline = err.name === 'TypeError' || /fetch|network|timed? ?out|abort/i.test(err.message);
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'retry';
+  b.title = 'Try again';
+  b.setAttribute('aria-label', 'Try again');
+  b.innerHTML = '<svg class="i" aria-hidden="true"><use href="#i-refresh"/></svg>';
+  b.addEventListener('click', () => { $(id).textContent = ''; retry(); });
+  $(id).replaceChildren(offline ? "Couldn't reach the forecast service." : err.message, b);
+}
+
+// ---------------------------------------------------------------- crosshair
+
+// The visible part of the map, in screen pixels, around the panel. On phones it's
+// the map above the sheet at its usual half height (62%), fixed so the crosshair
+// doesn't ride up and down with the sheet.
+function focusPx() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  let r = { l: 0, t: 0, r: w, b: h };
+  if (!state.nav) {
+    const p = $('panel').getBoundingClientRect();
+    if (phone.matches) r = { l: 0, t: 0, r: w, b: Math.max(120, Math.round(h * 0.38)) };
+    else if (p.width) r = { l: Math.min(p.right, w * 0.6), t: 0, r: w, b: h };
+  }
+  return [(r.l + r.r) / 2, (r.t + r.b) / 2, r];
+}
+
+// When the panel grows or shrinks, the map shifts so the same place stays under
+// the crosshair (and the last scan still matches it).
+let crossAt = null;
+function placeCrosshair() {
+  const el = $('crosshair');
+  el.hidden = !!state.nav || $('panel').classList.contains('full');
+  if (el.hidden) {
+    crossAt = null;
+    return;
+  }
+  const [x, y] = focusPx();
+  const scanning = state.chaser || state.watcher;
+  if (scanning && crossAt && !map.isMoving() && (crossAt[0] !== x || crossAt[1] !== y)) map.panBy([crossAt[0] - x, crossAt[1] - y], { duration: 0 });
+  crossAt = [x, y];
+  el.style.left = `${x}px`;
+  el.style.top = `${y}px`;
+}
+
+new ResizeObserver(placeCrosshair).observe($('panel'));
+addEventListener('resize', () => { crossAt = null; placeCrosshair(); });
+
+// Moving the map in Chase / Watch looks again around the new crosshair spot.
+let lastScan = null;
+let rescanTimer;
+map.on('moveend', (e) => {
+  if (!e.originalEvent || state.nav || !(state.chaser || state.watcher)) return;
+  clearTimeout(rescanTimer);
+  rescanTimer = setTimeout(() => {
+    const { center, radius } = scanRadius();
+    if (lastScan) {
+      const moved = haversine([center.lon, center.lat], [lastScan.center.lon, lastScan.center.lat]) / 1000;
+      const zoomed = Math.abs(radius - lastScan.radius) / lastScan.radius;
+      if (moved < lastScan.radius * 0.2 && zoomed < 0.3) return;
+    }
+    if (state.chaser) scanArea();
+    else scanViewArea();
+  }, 700);
+});
+
+// ---------------------------------------------------------------- phone sheet
+
+// On phones the panel is a bottom sheet with three stops: peek (just the header),
+// half (the default) and full screen. Drag the handle or header to move it.
+function sheetState() {
+  const p = $('panel');
+  return p.classList.contains('full') ? 'full' : p.classList.contains('collapsed') ? 'peek' : 'half';
+}
+
+function setSheetClasses(s) {
+  $('panel').classList.toggle('full', s === 'full');
+  $('panel').classList.toggle('collapsed', s === 'peek');
+}
+
+function sheetHeight(s) {
+  const p = $('panel');
+  const before = sheetState();
+  const { height, maxHeight } = p.style;
+  setSheetClasses(s);
+  p.style.height = '';
+  p.style.maxHeight = '';
+  const h = p.getBoundingClientRect().height;
+  setSheetClasses(before);
+  p.style.height = height;
+  p.style.maxHeight = maxHeight;
+  return h;
+}
+
+function snapSheet(target) {
+  const p = $('panel');
+  const from = p.getBoundingClientRect().height;
+  const to = sheetHeight(target);
+  setSheetClasses(target === 'peek' ? 'half' : target); // keep content visible while it slides
+  p.style.maxHeight = 'none';
+  p.style.height = `${from}px`;
+  p.getBoundingClientRect();
+  p.style.transition = 'height 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)';
+  p.style.height = `${to}px`;
+  clearTimeout(snapSheet.timer);
+  snapSheet.timer = setTimeout(() => {
+    setSheetClasses(target);
+    p.style.transition = '';
+    p.style.height = '';
+    p.style.maxHeight = '';
+    placeCrosshair();
+  }, 320);
+}
+
+(function sheetDrag() {
+  const p = $('panel');
+  let drag = null;
+  const grabbable = (t) => (t.closest('#handle-strip') || t.closest('#panel-head')) && !t.closest('button');
+
+  p.addEventListener('pointerdown', (e) => {
+    if (!phone.matches || state.nav || !grabbable(e.target)) return;
+    drag = { y: e.clientY, h: p.getBoundingClientRect().height, start: sheetState(), moved: false, samples: [[e.timeStamp, e.clientY]] };
+    p.setPointerCapture(e.pointerId);
+  });
+
+  p.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dy = e.clientY - drag.y;
+    if (!drag.moved && Math.abs(dy) < 6) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      drag.peek = sheetHeight('peek');
+      drag.max = sheetHeight('full');
+      setSheetClasses('half');
+      p.style.maxHeight = 'none';
+      p.style.transition = 'none';
+    }
+    p.style.height = `${Math.max(drag.peek, Math.min(drag.max, drag.h - dy))}px`;
+    drag.samples.push([e.timeStamp, e.clientY]);
+    if (drag.samples.length > 5) drag.samples.shift();
+  });
+
+  const end = (e) => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    if (!d.moved) {
+      // A tap on the handle toggles between peek and half.
+      if (e.target.closest('#handle-strip')) snapSheet(d.start === 'peek' ? 'half' : 'peek');
+      return;
+    }
+    const [t0, y0] = d.samples[0];
+    const v = (e.clientY - y0) / Math.max(e.timeStamp - t0, 1); // px per ms, + is down
+    const h = p.getBoundingClientRect().height;
+    const order = ['peek', 'half', 'full'];
+    const stops = { peek: d.peek, half: sheetHeight('half'), full: d.max };
+    let target;
+    if (v > 0.5) target = [...order].reverse().find((s) => stops[s] < h - 10) ?? 'peek'; // flick down
+    else if (v < -0.5) target = order.find((s) => stops[s] > h + 10) ?? 'full'; // flick up
+    else target = order.reduce((a, s) => (Math.abs(stops[s] - h) < Math.abs(stops[a] - h) ? s : a), 'half');
+    snapSheet(target);
+  };
+  p.addEventListener('pointerup', end);
+  p.addEventListener('pointercancel', end);
+}());
+
+phone.addEventListener('change', () => {
+  if (!phone.matches) $('panel').classList.remove('full');
+  placeCrosshair();
+});
