@@ -1085,3 +1085,8 @@ body.navigating .attribution-note { display: none; }
   color: var(--fg);
 }
 .retry .i { width: 14px; height: 14px; }
+
+/* A stop box being looked up (after you leave it or press Enter). */
+.stop.looking .marker { animation: looking 0.9s ease-in-out infinite; }
+@keyframes looking { 50% { opacity: 0.25; transform: scale(0.7); } }
+@media (prefers-reduced-motion: reduce) { .stop.looking .marker { animation: none; opacity: 0.5; } }

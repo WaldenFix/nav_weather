@@ -371,67 +371,55 @@ setupSearch('from');
 setupSearch('via');
 setupSearch('to');
 
+// A box is looked up once, when you leave it (tap another box or anywhere else)
+// or press Enter, not while you type. One request per place keeps the free
+// search services from timing out. The best match fills the box.
+const lookups = {}; // which -> pending lookup, so "Get route" can wait for it
+const STOP_FIELDS = ['from', 'via', 'to'];
+
 function setupSearch(which) {
   const input = $(which);
-  const list = $(`${which}-suggestions`);
-  let timer;
-  let controller;
-  let results = [];
-  let active = -1;
 
-  const close = () => { list.replaceChildren(); results = []; active = -1; };
+  input.addEventListener('input', () => { state[which] = null; });
 
-  const choose = (place) => {
-    setPlace(which, place);
-    close();
-    maybeRoute();
-  };
-
-  input.addEventListener('input', () => {
-    state[which] = null;
-    clearTimeout(timer);
-    const q = input.value.trim();
-    if (q.length < 3) return close();
-    timer = setTimeout(async () => {
-      controller?.abort();
-      controller = new AbortController();
-      try {
-        const bias = state.gps ?? state.from ?? state.to ?? mapCenter();
-        results = await search(q, bias, controller.signal);
-        active = -1;
-        list.replaceChildren(...results.map((r, i) => {
-          const li = document.createElement('li');
-          li.setAttribute('role', 'option');
-          li.textContent = r.title;
-          if (r.detail) {
-            const small = document.createElement('small');
-            small.textContent = r.detail;
-            li.append(small);
-          }
-          li.addEventListener('mousedown', (e) => { e.preventDefault(); choose(results[i]); });
-          return li;
-        }));
-      } catch (err) {
-        if (err.name !== 'AbortError') showStatus(err.message, true);
-      }
-    }, 250);
+  input.addEventListener('blur', () => {
+    lookUp(which).then((place) => {
+      // Route once you've left the stop boxes altogether (not while moving
+      // from "To" to "Via" to add a stop).
+      if (place && !STOP_FIELDS.includes(document.activeElement?.id)) maybeRoute();
+    });
   });
 
   input.addEventListener('keydown', (e) => {
-    if (!results.length) return;
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      active = (active + (e.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length;
-      [...list.children].forEach((li, i) => li.classList.toggle('active', i === active));
-    } else if (e.key === 'Enter' && active >= 0) {
-      e.preventDefault();
-      choose(results[active]);
-    } else if (e.key === 'Escape') {
-      close();
-    }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    input.blur(); // looks it up; routes if start and destination are both set
   });
+}
 
-  input.addEventListener('blur', () => setTimeout(close, 150));
+function lookUp(which) {
+  const q = $(which).value.trim();
+  if (state[which] || q.length < 3) return Promise.resolve(state[which]);
+  if (lookups[which]?.q === q) return lookups[which].promise;
+  const field = $(which).closest('.stop');
+  field?.classList.add('looking');
+  const promise = search(q, state.gps ?? state.from ?? state.to ?? mapCenter())
+    .then(([first]) => {
+      if ($(which).value.trim() !== q) return null; // edited meanwhile
+      if (!first) throw new Error(`Couldn't find "${q}"`);
+      setPlace(which, first);
+      return first;
+    })
+    .catch((err) => {
+      showStatus(err.message, true);
+      return null;
+    })
+    .finally(() => {
+      field?.classList.remove('looking');
+      if (lookups[which]?.promise === promise) delete lookups[which];
+    });
+  lookups[which] = { q, promise };
+  return promise;
 }
 
 function setPlace(which, place) {
@@ -594,6 +582,7 @@ function maybeRoute() {
 }
 
 async function resolvePlace(which) {
+  if (lookups[which]) await lookups[which].promise;
   if (state[which]) return state[which];
   const q = $(which).value.trim();
   if (!q) return null;
