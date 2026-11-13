@@ -144,13 +144,26 @@ mapReady.then(() => {
     },
   });
 
+  // Other route options: a dashed line on a dark outline, so it stands out from
+  // highways in every theme (in Dark and Night a plain grey line looked like a road).
   map.addSource('alts', { type: 'geojson', data: emptyFC() });
+  map.addLayer({
+    id: 'alt-casing',
+    type: 'line',
+    source: 'alts',
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#1e293b', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 6, 14, 12], 'line-opacity': 0.5 },
+  });
   map.addLayer({
     id: 'alt-line',
     type: 'line',
     source: 'alts',
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': '#64748b', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 4, 14, 9], 'line-opacity': 0.75 },
+    layout: { 'line-join': 'round' },
+    paint: {
+      'line-color': '#64748b',
+      'line-width': ['interpolate', ['linear'], ['zoom'], 5, 4, 14, 8],
+      'line-dasharray': [2, 1.2],
+    },
   });
 
   map.addSource('route', { type: 'geojson', data: emptyFC() });
@@ -175,10 +188,22 @@ mapReady.then(() => {
     },
   });
 
-  // Tap a grey alternative to switch to it.
-  map.on('click', 'alt-line', (e) => selectOption(e.features[0].properties.idx));
-  map.on('mouseenter', 'alt-line', () => { map.getCanvas().style.cursor = 'pointer'; });
-  map.on('mouseleave', 'alt-line', () => { map.getCanvas().style.cursor = ''; });
+  // An invisible, finger-wide band over each alternative, so it's easy to tap.
+  map.addLayer({
+    id: 'alt-hit',
+    type: 'line',
+    source: 'alts',
+    paint: { 'line-color': '#000000', 'line-width': 28, 'line-opacity': 0 },
+  });
+
+  // Tap a dashed alternative to switch to it (but not where it shares road with
+  // the chosen route: that tap is ambiguous).
+  map.on('click', 'alt-hit', (e) => {
+    if (map.queryRenderedFeatures(e.point, { layers: ['route-line'] }).length) return;
+    selectOption(e.features[0].properties.idx);
+  });
+  map.on('mouseenter', 'alt-hit', () => { map.getCanvas().style.cursor = 'pointer'; });
+  map.on('mouseleave', 'alt-hit', () => { map.getCanvas().style.cursor = ''; });
 
   map.on('click', 'nws-fill', (e) => {
     const p = e.features[0].properties;
@@ -361,6 +386,8 @@ function styleRouteLayers(t) {
   map.setPaintProperty('route-casing', 'line-color', cssVar('--route-casing'));
   map.setPaintProperty('route-casing', 'line-opacity', t === 'light' ? 0.55 : 0.9);
   map.setPaintProperty('alt-line', 'line-color', cssVar('--route-alt'));
+  map.setPaintProperty('alt-casing', 'line-color', cssVar('--route-casing'));
+  map.setPaintProperty('alt-casing', 'line-opacity', t === 'light' ? 0.5 : 0.9);
 }
 
 applyTheme();
@@ -677,7 +704,7 @@ async function findAlternatives(token, from, to) {
     state.options = [...state.options, ...built.filter((b) => b.status === 'fulfilled').map((b) => b.value)]
       .sort((a, b) => a.route.duration - b.route.duration);
     state.selected = state.options.findIndex((o) => o.route === current);
-    $('alt-status').textContent = state.options.length > 1 ? 'Tap a route, or a grey line on the map, to switch.' : 'No other sensible routes found.';
+    $('alt-status').textContent = state.options.length > 1 ? 'Tap a route, or a dashed line on the map, to switch.' : 'No other sensible routes found.';
     render();
   } catch {
     if (token === state.planToken) $('alt-status').textContent = 'Couldn\'t load alternative routes.';
