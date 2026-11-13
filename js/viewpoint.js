@@ -12,7 +12,6 @@ const PHOTON = 'https://photon.komoot.io/api/';
 const CAMERAS = 'https://cameras.alertcalifornia.org/public-camera-data/all_cameras-v3.json';
 const LEVELS = [1000, 975, 950, 925, 900, 850, 800, 700];
 const SATURATED = 94; // % relative humidity: inside cloud or fog
-const HOURS = 36;
 const MAX_KM = 30; // peaks searched within this of the crosshair
 const MAX_SPOTS = 6;
 
@@ -122,7 +121,7 @@ export async function viewForecast(spots) {
     daily: 'sunrise,sunset',
     timeformat: 'unixtime',
     timezone: 'GMT',
-    forecast_days: '3',
+    forecast_days: '4',
   });
   const res = await fetch(`${API}?${params}`);
   if (!res.ok) throw new Error(`Viewpoint forecast failed (${res.status})`);
@@ -135,7 +134,7 @@ export async function viewForecast(spots) {
     const ele = s.ele ?? list[k].elevation ?? 0;
     const hours = [];
     h.time.forEach((t, i) => {
-      if (t < now - 3600 || t > now + HOURS * 3600) return;
+      if (t < now - 3600) return;
       hours.push(classify(h, i, ele));
     });
     // Next to fogged-in hours, clouds are moving on or off the summit: the timelapse moment.

@@ -397,13 +397,20 @@ function setupSearch(which) {
   });
 }
 
+// Search near the other places you've entered first (so a street name in "To"
+// is found near your "From"), then near you, then the map.
+function biasFor(which) {
+  const others = STOP_FIELDS.filter((w) => w !== which).map((w) => state[w]);
+  return others.find(Boolean) ?? state.gps ?? mapCenter();
+}
+
 function lookUp(which) {
   const q = $(which).value.trim();
   if (state[which] || q.length < 3) return Promise.resolve(state[which]);
   if (lookups[which]?.q === q) return lookups[which].promise;
   const field = $(which).closest('.stop');
   field?.classList.add('looking');
-  const promise = search(q, state.gps ?? state.from ?? state.to ?? mapCenter())
+  const promise = search(q, biasFor(which))
     .then(([first]) => {
       if ($(which).value.trim() !== q) return null; // edited meanwhile
       if (!first) throw new Error(`Couldn't find "${q}"`);
@@ -482,16 +489,23 @@ $('collapse').addEventListener('click', () => {
 // strip; tapping the strip slides the form back for editing.
 function foldForm(fold) {
   const wrap = $('form-wrap');
-  if (fold === wrap.classList.contains('folded')) return;
   $('trip-from').textContent = shortName(state.from);
+  $('trip-via').textContent = shortName(state.via);
+  $('trip-via').hidden = $('trip-via-arrow').hidden = !state.via;
   $('trip-to').textContent = shortName(state.to);
-  $('trip-line').hidden = !fold;
+  if (fold === wrap.classList.contains('folded')) return;
+  $('trip-row').hidden = !fold;
   $('trip-line').setAttribute('aria-expanded', String(!fold));
   wrap.classList.add('moving'); // clip while it slides; the suggestion lists need overflow afterwards
   wrap.classList.toggle('folded', fold);
   setTimeout(() => wrap.classList.remove('moving'), 400);
 }
 $('trip-line').addEventListener('click', () => foldForm(false));
+// "+ Stop": open the form with everything still filled in, ready to type the stop.
+$('trip-add').addEventListener('click', () => {
+  foldForm(false);
+  setTimeout(() => $('via').focus(), 380);
+});
 
 // ---------------------------------------------------------------- departure time
 
@@ -553,6 +567,13 @@ function updateUnitsChip() {
 
 $('toggle-radar').addEventListener('click', () => (state.radarOn ? disableRadar() : enableRadar()));
 
+// Radar is on whenever the app opens; the chip turns it off. While it's on, the
+// newest frame is fetched every 10 minutes (RainViewer updates about that often).
+enableRadar();
+setInterval(() => {
+  if (state.radarOn && document.visibilityState === 'visible') enableRadar();
+}, 10 * 60 * 1000);
+
 async function enableRadar() {
   const btn = $('toggle-radar');
   await mapReady;
@@ -586,7 +607,7 @@ async function resolvePlace(which) {
   if (state[which]) return state[which];
   const q = $(which).value.trim();
   if (!q) return null;
-  const [first] = await search(q, state.gps ?? state.from ?? state.to ?? mapCenter());
+  const [first] = await search(q, biasFor(which));
   if (!first) throw new Error(`Couldn't find "${q}"`);
   setPlace(which, first);
   return first;
@@ -848,7 +869,9 @@ function renderOptions(t0) {
       + ` · ${fmtDist(o.route.distance)} · ${fmtDuration(s.time)} · worst weather: ${SEVERITY_LABEL[s.worst].toLowerCase()}`
       + (s.storms ? ` · ${s.storms} storm point${s.storms > 1 ? 's' : ''}` : '');
     btn.innerHTML = `${signSvg(s.worst)}<div><b></b><span></span></div>`;
-    btn.querySelector('b').textContent = `${o.route.ferries ? '⛴ ' : ''}${o.route.roads[0] ?? (o.route.ferries ? 'Ferry' : `Route ${i + 1}`)}`;
+    // Name each option by its main roads, e.g. "I-80 · I-25" vs "I-15 · I-70".
+    const roads = o.route.roads.slice(0, 2).join(' · ');
+    btn.querySelector('b').textContent = `${o.route.ferries ? '⛴ ' : ''}${roads || (o.route.ferries ? 'Ferry' : `Route ${i + 1}`)}`;
     btn.querySelector('span').textContent = i !== fastest && extra >= 120 ? `+${hoursMinutes(extra)}` : hoursMinutes(s.time);
     btn.addEventListener('click', () => selectOption(i));
     return btn;
@@ -1214,12 +1237,14 @@ function anchors() {
   return [state.gps, state.from, state.to].filter(Boolean);
 }
 
+// Where you're setting off from: a start you typed beats your GPS position.
 function originPoint(center) {
-  return state.gps ?? state.from ?? center;
+  return state.from ?? state.gps ?? center;
 }
 
 function fromLabel() {
-  return state.gps ? 'from you' : state.from ? 'from your start' : 'from the map centre';
+  if (state.from && state.from.label !== 'My location') return 'from your start';
+  return state.from || state.gps ? 'from you' : 'from the map centre';
 }
 
 // Before a storm scan, bring the driver's places into view so the scan covers them.
@@ -1274,14 +1299,14 @@ async function scanArea() {
   lastScan = { center, radius };
   $('scan-status').textContent = `Scanning ${fmtDist(radius * 1000)} around the crosshair…`;
   try {
-    const cells = await scanStorms(center, radius);
+    const cells = await scanStorms(center, radius, 12, leaveTime());
     if (!state.chaser || token !== state.scanToken) return;
     state.spotSel = null;
-    state.targets = pickTargets(cells, origin, radius, { anchors: anchors() });
+    state.targets = pickTargets(cells, origin, radius, { anchors: anchors(), start: leaveTime() });
     drawStormCells(cells);
     $('scan-status').textContent = state.targets.length
       ? `Best storm potential within ${fmtDist(radius * 1000)} (distances ${fromLabel()}):`
-      : `No thunderstorm potential within ${fmtDist(radius * 1000)} in the next 12 hours.${windNote(cells, center) || ' Zoom out or move the map.'}`;
+      : `No thunderstorm potential within ${fmtDist(radius * 1000)} in the 12 hours ${leaveWords()}.${windNote(cells, center) || ' Zoom out or move the map.'}`;
     renderTargets();
   } catch (err) {
     if (token === state.scanToken) scanFailed('scan-status', err, scanArea);
@@ -1375,7 +1400,7 @@ async function scanViewArea() {
 
 async function scanCoastArea(center, radius, token) {
   $('watch-status').textContent = `Looking for big surf and wind within ${fmtDist(radius * 1000)}…`;
-  const { cells, spots, noCoast } = await scanCoast(center, radius, { anchors: anchors(), origin: originPoint(center) });
+  const { cells, spots, noCoast } = await scanCoast(center, radius, { anchors: anchors(), origin: originPoint(center), start: leaveTime() });
   if (!state.watcher || state.watchKind !== 'coast' || token !== state.scanToken) return;
   state.spots = spots;
   state.spotSel = null;
@@ -1388,13 +1413,13 @@ async function scanCoastArea(center, radius, token) {
     ? `Best coastal spots (distances ${fromLabel()}):`
     : noCoast
       ? 'No coastline in view. Move the map over a coast.'
-      : `No big surf or strong wind on this coast in the next 36 hours.`;
+      : `No big surf or strong wind on this coast in the 36 hours ${leaveWords()}.`;
   renderSpots();
 }
 
 async function scanThunderArea(center, radius, token) {
   $('watch-status').textContent = `Looking for storms and viewing spots within ${fmtDist(radius * 1000)}…`;
-  const { cells, spots } = await scanViewing(center, radius, { origin: originPoint(center), anchors: anchors() });
+  const { cells, spots } = await scanViewing(center, radius, { origin: originPoint(center), anchors: anchors(), start: leaveTime() });
   if (!state.watcher || state.watchKind !== 'thunder' || token !== state.scanToken) return;
   state.spots = spots;
   state.spotSel = null;
@@ -1412,7 +1437,7 @@ async function scanThunderArea(center, radius, token) {
     ? `Best viewing spots (distances ${fromLabel()}):`
     : strongest >= 40
       ? 'There are storms around, but no dry spot with a clear view of them. Try zooming out.'
-      : `No thunderstorms worth watching within ${fmtDist(radius * 1000)} in the next 12 hours.${wind ? `${wind} Try Surf above.` : ' Zoom out or move the map.'}`;
+      : `No thunderstorms worth watching within ${fmtDist(radius * 1000)} in the 12 hours ${leaveWords()}.${wind ? `${wind} Try Surf above.` : ' Zoom out or move the map.'}`;
   renderSpots();
 }
 
@@ -1963,8 +1988,8 @@ async function scanViewpoints(center, radius, token) {
 
 // When you'd get to a spot if you leave at the chosen time (rough mountain-road pace).
 function arriveAtSpot(s) {
-  const origin = state.gps ?? state.from;
-  const leave = state.leaveAt ?? now();
+  const origin = state.from ?? state.gps;
+  const leave = leaveTime();
   if (!origin) return leave;
   return leave + (haversine([origin.lon, origin.lat], [s.lon, s.lat]) * 1.3) / 20;
 }
@@ -2024,7 +2049,7 @@ function renderViews() {
     // arrive is outlined. Tap a square for that hour.
     const strip = document.createElement('div');
     strip.className = 'vs-strip';
-    const from = now() - 1800;
+    const from = leaveTime() - 1800;
     s.hours.filter((h) => h.time >= from).slice(0, 30).forEach((h) => {
       const c = document.createElement('i');
       c.style.background = VIEW_COLORS[h.kind];
@@ -2069,7 +2094,7 @@ addEventListener('resize', sizeStrips);
 function spotExtras(s) {
   const box = document.createElement('div');
   box.className = 'vs-extra';
-  const sunrise = s.sunrise.find((t) => t > (state.leaveAt ?? now()));
+  const sunrise = s.sunrise.find((t) => t > leaveTime());
   if (sunrise) {
     const sun = document.createElement('small');
     sun.textContent = `☀ Sunrise ${fmtDayTime(sunrise)}`;
@@ -2122,6 +2147,16 @@ setInterval(() => {
   if (!state.leaveAt && document.activeElement !== $('leave-at')) $('leave-at').value = toLocalInput(now());
 }, 30000);
 
+// When you're leaving: the chosen time, or now.
+function leaveTime() {
+  return state.leaveAt ?? now();
+}
+
+// "from now" / "from tomorrow 3:30 AM", for status lines.
+function leaveWords() {
+  return state.leaveAt ? `from ${fmtDayTime(state.leaveAt)}` : 'from now';
+}
+
 // Hours from the plan's base time to the chosen departure (0 = now).
 function leaveOffset() {
   if (!state.leaveAt) return 0;
@@ -2133,10 +2168,11 @@ function setLeaveAt(t, apply = true) {
   $('leave-at').value = toLocalInput(state.leaveAt ?? now());
   $('leave-now').hidden = !state.leaveAt;
   if (!apply) return;
-  if (state.watcher && state.spots?.[0]?.show === 'view') {
+  if (state.chaser) scanArea();
+  else if (state.watcher && state.watchKind === 'view' && state.spots?.[0]?.show === 'view') {
     rankViews();
     renderSpots();
-  }
+  } else if (state.watcher) scanViewArea();
   if (state.route && !state.nav) {
     state.baseTime = now();
     state.departOffset = leaveOffset();

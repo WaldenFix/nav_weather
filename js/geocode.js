@@ -1,5 +1,5 @@
-// Place search via Photon (https://photon.komoot.io), an open-source geocoder
-// built on OpenStreetMap data. It allows search-as-you-type, unlike Nominatim.
+// Place search on OpenStreetMap data: Nominatim (https://nominatim.org) first,
+// Photon (https://photon.komoot.io) as backup and for town names while driving.
 
 const PHOTON = 'https://photon.komoot.io/api/';
 const PHOTON_REVERSE = 'https://photon.komoot.io/reverse';
@@ -28,26 +28,27 @@ export async function reverse({ lat, lon }, signal) {
   return p.countrycode === 'US' && US_STATES[p.state] ? `${town}, ${US_STATES[p.state]}` : town;
 }
 
-// Each box is looked up once (when you leave it or press Enter). Answers are
-// cached, each request gives up after a few seconds, and if Photon fails we
-// use Nominatim instead for a while.
+// Each box is looked up once (when you leave it or press Enter), so Nominatim's
+// usage policy (no search-as-you-type, about one request a second) is easy to
+// keep. Nominatim is much better than Photon at US street addresses, so it goes
+// first; Photon takes over for a minute if Nominatim fails. Answers are cached.
 const cache = new Map();
 const COOLDOWN_MS = 60000;
-let photonDownUntil = 0;
+let nominatimDownUntil = 0;
 
 export async function search(query, bias, signal) {
   const key = `${query.toLowerCase()}|${bias ? `${bias.lat.toFixed(1)},${bias.lon.toFixed(1)}` : ''}`;
   if (cache.has(key)) return cache.get(key);
-  if (Date.now() >= photonDownUntil) {
+  if (Date.now() >= nominatimDownUntil) {
     try {
-      return remember(key, await photon(query, bias, signal));
+      return remember(key, await nominatim(query, bias, signal));
     } catch (err) {
       if (err.name === 'AbortError' && signal?.aborted) throw err;
-      photonDownUntil = Date.now() + COOLDOWN_MS;
+      nominatimDownUntil = Date.now() + COOLDOWN_MS;
     }
   }
   try {
-    return remember(key, await nominatim(query, signal));
+    return remember(key, await photon(query, bias, signal));
   } catch (err) {
     if (err.name === 'AbortError' && signal?.aborted) throw err;
     throw new Error("Place search isn't responding right now. Try again in a minute, or right-click the map to pick a spot.");
@@ -103,12 +104,19 @@ async function photon(query, bias, signal) {
   }).filter((r) => !seen.has(r.label) && seen.add(r.label)).slice(0, 6);
 }
 
-// Backup search. Fine for Nominatim's usage policy because we never search as
-// you type. US first, then anywhere.
-async function nominatim(query, signal) {
+// Prefers US results and places near the hint (the other places you've entered),
+// without ruling anything out: "Portland" is still Oregon from San Francisco.
+async function nominatim(query, bias, signal) {
+  // A zoomed-out map centre is too vague to prefer.
+  const near = bias && !(bias.zoom < 8) ? bias : null;
   const ask = async (us) => {
     const params = new URLSearchParams({ q: query, format: 'jsonv2', addressdetails: '1', limit: '6' });
     if (us) params.set('countrycodes', 'us');
+    if (near) {
+      const d = 1;
+      params.set('viewbox', [near.lon - d, near.lat + d, near.lon + d, near.lat - d].map((n) => n.toFixed(3)).join(','));
+      params.set('bounded', '0');
+    }
     const res = await fetch(`${NOMINATIM}?${params}`, { signal: withTimeout(signal, 8000) });
     if (!res.ok) throw new Error(`Place search failed (${res.status})`);
     return res.json();
@@ -119,10 +127,10 @@ async function nominatim(query, signal) {
     const a = r.address ?? {};
     const isUS = a.country_code === 'us';
     const street = [a.house_number, a.road].filter(Boolean).join(' ');
-    const title = r.name || street || a.city || a.town || a.village || r.display_name.split(',')[0];
+    const title = (r.name && r.name !== a.road ? r.name : '') || street || a.city || a.town || a.village || r.display_name.split(',')[0];
     const city = a.city || a.town || a.village || a.hamlet || '';
     const state = isUS ? US_STATES[a.state] ?? a.state : a.state;
-    const detail = [r.name ? street : '', city, state, isUS ? '' : a.country].filter((x) => x && x !== title).join(', ');
+    const detail = [title !== street ? street : '', city, state, isUS ? '' : a.country].filter((x) => x && x !== title).join(', ');
     return { title, detail, label: detail ? `${title}, ${detail}` : title, lat: Number(r.lat), lon: Number(r.lon) };
   });
 }

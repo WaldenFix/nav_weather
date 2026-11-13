@@ -36,8 +36,14 @@ export function stormLevel(score) {
   return { label: 'Low', sev: 0 };
 }
 
-// Peak storm potential over the next `hours` at each point of a grid centred on `center`.
-export async function scanStorms(center, radiusKm, hours = 12) {
+// Days of forecast needed to cover `hours` from `start` (unix s).
+export function forecastDays(start, hours) {
+  return String(Math.min(7, Math.ceil((start + hours * 3600 - Date.now() / 1000) / 86400) + 1));
+}
+
+// Peak storm potential over the `hours` after `start` (when you leave; default now)
+// at each point of a grid centred on `center`.
+export async function scanStorms(center, radiusKm, hours = 12, start = Date.now() / 1000) {
   const points = [];
   const dLat = radiusKm / 111;
   const dLon = radiusKm / (111 * Math.cos((center.lat * Math.PI) / 180));
@@ -56,19 +62,18 @@ export async function scanStorms(center, radiusKm, hours = 12) {
     hourly: VARS.join(','),
     timeformat: 'unixtime',
     timezone: 'GMT',
-    forecast_days: '2',
+    forecast_days: forecastDays(start, hours),
   });
   const res = await fetch(`${API}?${params}`);
   if (!res.ok) throw new Error(`Storm scan failed (${res.status})`);
   const data = await res.json();
   const list = Array.isArray(data) ? data : [data];
 
-  const now = Date.now() / 1000;
   return list.map(({ hourly: h }, k) => {
     let best = { score: -1 };
     const wind = { maxGusts: 0 };
     h.time.forEach((t, i) => {
-      if (t < now - 3600 || t > now + hours * 3600) return;
+      if (t < start - 3600 || t > start + hours * 3600) return;
       trackWind(wind, h, i);
       const hour = {
         time: t,
@@ -124,9 +129,8 @@ export function nearBias(c, anchors, radiusKm) {
 // The strongest cells, spread out so the list isn't five neighbours of one storm.
 // Targets you can plausibly reach before the peak are listed first, and ones near
 // the anchors (you, your start, your destination) are favoured.
-export function pickTargets(cells, origin, radiusKm, { count = 5, anchors = [] } = {}) {
+export function pickTargets(cells, origin, radiusKm, { count = 5, anchors = [], start = Date.now() / 1000 } = {}) {
   const minGap = (radiusKm * 1000) / 3;
-  const now = Date.now() / 1000;
   const picked = [];
   const rank = (c) => nearBias(c, anchors, radiusKm);
   for (const c of [...cells].sort((a, b) => rank(b) - rank(a))) {
@@ -134,7 +138,7 @@ export function pickTargets(cells, origin, radiusKm, { count = 5, anchors = [] }
     if (picked.some((p) => haversine([p.lon, p.lat], [c.lon, c.lat]) < minGap)) continue;
     const dist = haversine([origin.lon, origin.lat], [c.lon, c.lat]);
     // Rough drive time: roads are ~25% longer than a straight line, at ~90 km/h.
-    const eta = now + (dist * 1.25) / 25;
+    const eta = start + (dist * 1.25) / 25;
     picked.push({ ...c, dist, eta, reachable: eta <= c.time + 1800, bearing: compass(origin, c) });
     if (picked.length === count) break;
   }

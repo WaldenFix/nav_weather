@@ -6,7 +6,8 @@ const INDEX = 'https://api.rainviewer.com/public/weather-maps.json';
 const SOURCE = 'radar';
 
 export async function showRadar(map) {
-  const res = await fetch(INDEX);
+  const res = await fetch(INDEX, { signal: AbortSignal.timeout(10000) }).catch(() => null);
+  if (!res) throw new Error('Radar is unavailable right now');
   if (!res.ok) throw new Error('Radar is unavailable right now');
   const data = await res.json();
   const frames = data.radar?.past ?? [];

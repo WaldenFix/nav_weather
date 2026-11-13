@@ -29,8 +29,9 @@ async function request(points, extra = {}) {
   return data.routes.map(prepare);
 }
 
-async function valhalla(points) {
+async function valhalla(points, extra = {}) {
   const body = {
+    ...extra,
     locations: points.map((p) => ({ lat: p.lat, lon: p.lon })),
     costing: 'auto',
     format: 'osrm',
@@ -69,15 +70,30 @@ export async function getAlternatives(from, to, known = []) {
 
   const [osrm, val] = await Promise.all([
     request([from, to], { alternatives: '3' }).catch(() => []),
-    valhalla([from, to]).catch(() => []),
+    valhalla([from, to], { alternates: 2 }).catch(() => []),
   ]);
   add(osrm);
-  add(val.filter((r) => r.ferries)); // a ferry crossing vs driving around
+  // Valhalla finds other ways too (e.g. US-40 over the Rockies, or a ferry), but
+  // its drive times run quicker than OSRM's. Put them on OSRM's scale using a
+  // route both services found, so options compare fairly.
+  const both = val.map((v) => [v, found.find((f) => overlap(f, v) > 0.85)]).find(([, f]) => f);
+  if (both) {
+    const k = both[1].duration / both[0].duration;
+    for (const v of val) rescale(v, k);
+    add(val);
+  } else {
+    add(val.filter((r) => r.ferries)); // can't compare times; only offer a ferry crossing
+  }
   if (found.length < 2 && haversine([from.lon, from.lat], [to.lon, to.lat]) > 80000) {
     const nudged = await Promise.allSettled(corridorPoints(from, to).map((via) => getRoute([from, via, to])));
     add(nudged.filter((r) => r.status === 'fulfilled').map((r) => r.value));
   }
   return found.filter((r) => !known.includes(r));
+}
+
+function rescale(route, k) {
+  route.duration *= k;
+  route.cumTime = route.cumTime.map((t) => t * k);
 }
 
 // Combine route lists, dropping near-duplicates and much slower options.

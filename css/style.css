@@ -1090,3 +1090,9 @@ body.navigating .attribution-note { display: none; }
 .stop.looking .marker { animation: looking 0.9s ease-in-out infinite; }
 @keyframes looking { 50% { opacity: 0.25; transform: scale(0.7); } }
 @media (prefers-reduced-motion: reduce) { .stop.looking .marker { animation: none; opacity: 0.5; } }
+
+/* Folded trip: "SLC → DENVER" strip plus "+ Stop". */
+.trip-row { display: flex; gap: 8px; align-items: stretch; }
+.trip-row[hidden] { display: none; }
+.trip-row .trip-line { flex: 1; min-width: 0; }
+.trip-add { flex: none; box-shadow: none; background: var(--bg-soft); border: 1px solid var(--border); padding: 0 14px; }

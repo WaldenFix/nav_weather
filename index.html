@@ -117,11 +117,15 @@
         <ul id="spots" class="targets"></ul>
       </section>
 
-      <!-- Once a route is planned the form slides away, leaving this one line. Tap it to edit. -->
-      <button type="button" class="trip-line" id="trip-line" hidden aria-expanded="false">
-        <span id="trip-from"></span><svg class="i" aria-hidden="true"><use href="#i-nav"/></svg><span id="trip-to"></span>
-        <svg class="i chev" aria-hidden="true"><use href="#i-chevron"/></svg>
-      </button>
+      <!-- Once a route is planned the form slides away, leaving this one line. Tap it
+           to edit, or "+ Stop" to add a stop; the places you entered stay filled in. -->
+      <div class="trip-row" id="trip-row" hidden>
+        <button type="button" class="trip-line" id="trip-line" aria-expanded="false" title="Edit start, stop and destination">
+          <span id="trip-from"></span><svg class="i" aria-hidden="true"><use href="#i-nav"/></svg><span id="trip-via" hidden></span><svg class="i" id="trip-via-arrow" aria-hidden="true" hidden><use href="#i-nav"/></svg><span id="trip-to"></span>
+          <svg class="i chev" aria-hidden="true"><use href="#i-chevron"/></svg>
+        </button>
+        <button type="button" class="chip trip-add" id="trip-add" title="Add a stop, e.g. Denver to go through the Rockies">+ Stop</button>
+      </div>
       <div class="form-wrap" id="form-wrap">
       <form id="route-form" autocomplete="off" novalidate>
         <div class="trip-card">
@@ -293,7 +297,7 @@
   <footer class="attribution-note">
     Weather <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> ·
     Routing <a href="https://project-osrm.org/" target="_blank" rel="noopener">OSRM</a> ·
-    Search <a href="https://photon.komoot.io/" target="_blank" rel="noopener">Photon</a> ·
+    Search <a href="https://nominatim.org/" target="_blank" rel="noopener">Nominatim</a> &amp; <a href="https://photon.komoot.io/" target="_blank" rel="noopener">Photon</a> ·
     Warnings <a href="https://www.weather.gov/" target="_blank" rel="noopener">NWS</a>
   </footer>
 

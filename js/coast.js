@@ -3,7 +3,7 @@
 // beach parks, beaches) from Photon / OpenStreetMap.
 
 import { haversine } from './route.js';
-import { stormLevel, nearBias } from './storm.js';
+import { stormLevel, nearBias, forecastDays } from './storm.js';
 import { grid } from './watch.js';
 
 const MARINE = 'https://marine-api.open-meteo.com/v1/marine';
@@ -25,13 +25,14 @@ export function waveScore({ height, period, gusts, day, precip }) {
 
 // Returns { cells, spots }: wave sites with their peak score (for the map) and the
 // best lookouts on shore, each with when to be there and what to expect.
-export async function scanCoast(center, radiusKm, { anchors = [], origin = center, hours = 36 } = {}) {
+export async function scanCoast(center, radiusKm, { anchors = [], origin = center, hours = 36, start = Date.now() / 1000 } = {}) {
+  const days = forecastDays(start, hours);
   // The marine API answers each point with the nearest sea grid cell, so a point on
   // land gets the sea just off the nearest coast: exactly where you'd stand to watch.
   // Points out at sea are skipped (nobody can watch waves 100 km offshore), as are
   // points so far inland that the "nearest coast" is a long way off.
   const pts = grid(center, radiusKm, 9);
-  const [marine, elevation] = await Promise.all([getJSON(MARINE, pts, ['wave_height', 'wave_period']), elevations(pts)]);
+  const [marine, elevation] = await Promise.all([getJSON(MARINE, pts, ['wave_height', 'wave_period'], days), elevations(pts)]);
   const sites = new Map();
   marine.forEach((m, k) => {
     if (!m?.hourly?.wave_height?.some((h) => h != null) || !(elevation[k] > 0)) return;
@@ -42,17 +43,16 @@ export async function scanCoast(center, radiusKm, { anchors = [], origin = cente
   if (!sites.size) return { cells: [], spots: [], noCoast: true };
 
   const list = [...sites.values()];
-  const weather = await getJSON(API, list, ['wind_gusts_10m', 'wind_direction_10m', 'precipitation', 'is_day']);
-  const now = Date.now() / 1000;
+  const weather = await getJSON(API, list, ['wind_gusts_10m', 'wind_direction_10m', 'precipitation', 'is_day'], days);
   for (const [k, site] of list.entries()) {
     const w = weather[k]?.hourly;
     // Coastal storms last hours to days, so aim for the best hour you can still
     // drive there for; fall back to the overall best if none is reachable.
-    const reachBy = now + (haversine([origin.lon, origin.lat], [site.lon, site.lat]) * 1.25) / 25;
+    const reachBy = start + (haversine([origin.lon, origin.lat], [site.lon, site.lat]) * 1.25) / 25;
     let best = { score: -1 };
     let bestReachable = { score: -1 };
     site.sea.time.forEach((t, i) => {
-      if (t < now - 1800 || t > now + hours * 3600 || !w) return;
+      if (t < start - 1800 || t > start + hours * 3600 || !w) return;
       const j = w.time.indexOf(t);
       if (j < 0) return;
       const hour = {
@@ -85,7 +85,7 @@ export async function scanCoast(center, radiusKm, { anchors = [], origin = cente
     const lookout = await findLookout(s).catch(() => null);
     const at = lookout ?? { lat: s.lat, lon: s.lon, name: await areaName(s) };
     const dist = haversine([origin.lon, origin.lat], [at.lon, at.lat]);
-    const eta = now + (dist * 1.25) / 25;
+    const eta = start + (dist * 1.25) / 25;
     spots.push({
       ...at,
       show: 'waves',
@@ -155,14 +155,14 @@ async function elevations(points) {
   return (await res.json()).elevation;
 }
 
-async function getJSON(base, points, vars) {
+async function getJSON(base, points, vars, days = '3') {
   const params = new URLSearchParams({
     latitude: points.map((p) => p.lat.toFixed(3)).join(','),
     longitude: points.map((p) => p.lon.toFixed(3)).join(','),
     hourly: vars.join(','),
     timeformat: 'unixtime',
     timezone: 'GMT',
-    forecast_days: '3',
+    forecast_days: days,
   });
   const res = await fetch(`${base}?${params}`);
   if (!res.ok) throw new Error(`Coastal scan failed (${res.status})`);

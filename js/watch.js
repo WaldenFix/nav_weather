@@ -4,7 +4,7 @@
 // (best with the sun behind you); after dark it's the lightning.
 
 import { haversine } from './route.js';
-import { stormScore, stormLevel, compass, trackWind, nearBias } from './storm.js';
+import { stormScore, stormLevel, compass, trackWind, nearBias, forecastDays } from './storm.js';
 
 const API = 'https://api.open-meteo.com/v1/forecast';
 const GRID = 11;
@@ -23,10 +23,10 @@ const MAX_STORMS = 3;
 // when. 2: rings of candidate spots 20–50 km around the strongest few storms are
 // checked for a dry, clear view. Returns { cells, spots }: storm potential per grid
 // point (for the map) and the best viewing spots, each paired with its storm.
-export async function scanViewing(center, radiusKm, { origin = center, anchors = [], hours = 12 } = {}) {
-  const points = await forecast(grid(center, radiusKm));
-  const now = Date.now() / 1000;
-  const inWindow = (t) => t >= now - 1800 && t <= now + hours * 3600;
+export async function scanViewing(center, radiusKm, { origin = center, anchors = [], hours = 12, start = Date.now() / 1000 } = {}) {
+  const days = forecastDays(start, hours);
+  const points = await forecast(grid(center, radiusKm), days);
+  const inWindow = (t) => t >= start - 1800 && t <= start + hours * 3600;
 
   // Storm potential at every grid point; keep each point's peak hour.
   const cells = points.map((p) => {
@@ -61,14 +61,14 @@ export async function scanViewing(center, radiusKm, { origin = center, anchors =
       ...destination(s, (360 / RING_BEARINGS) * b, km),
       storm: s,
     }))));
-    const viewers = await forecast(rings);
+    const viewers = await forecast(rings, days);
     for (const v of viewers) {
       const s = v.storm;
       const neighbours = viewers.filter((o) => o.storm === s);
       const view = viewScore(v, s, s.p, haversine([v.lon, v.lat], [s.lon, s.lat]) / 1000, neighbours);
       if (!view) continue;
       const dist = haversine([origin.lon, origin.lat], [v.lon, v.lat]);
-      const eta = now + (dist * 1.25) / 25; // same rough drive-time guess as the chaser
+      const eta = start + (dist * 1.25) / 25; // same rough drive-time guess as the chaser
       spots.push({ lat: v.lat, lon: v.lon, ...view, dist, eta, reachable: eta <= view.time + 1800 });
     }
   }
@@ -80,14 +80,14 @@ export async function scanViewing(center, radiusKm, { origin = center, anchors =
 }
 
 // Attach hourly forecasts (`h`) and elevation to each point, in one request.
-async function forecast(points) {
+async function forecast(points, days) {
   const params = new URLSearchParams({
     latitude: points.map((p) => p.lat.toFixed(3)).join(','),
     longitude: points.map((p) => p.lon.toFixed(3)).join(','),
     hourly: VARS.join(','),
     timeformat: 'unixtime',
     timezone: 'GMT',
-    forecast_days: '2',
+    forecast_days: days,
   });
   const res = await fetch(`${API}?${params}`);
   if (!res.ok) throw new Error(`Storm scan failed (${res.status})`);
