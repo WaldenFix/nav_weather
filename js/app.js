@@ -615,6 +615,13 @@ async function enableRadar() {
   }
 }
 
+{
+  const key = $('radar-legend');
+  const flip = () => key.classList.toggle('open');
+  key.addEventListener('click', flip);
+  key.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); } });
+}
+
 function disableRadar() {
   hideRadar(map);
   state.radarOn = false;

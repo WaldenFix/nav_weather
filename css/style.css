@@ -601,6 +601,15 @@ input[type="text"] {
 
 .radar-legend .ends { display: flex; justify-content: space-between; }
 
+/* Folded by default to two thin colour bars; tap to show the words. */
+.radar-legend { cursor: pointer; }
+.radar-legend:not(.open) { width: 76px; padding: 6px 8px; border-radius: 8px; }
+.radar-legend:not(.open) .legend-title,
+.radar-legend:not(.open) .ends { display: none; }
+.radar-legend:not(.open) .bar { height: 5px; margin: 0; }
+.radar-legend:not(.open) .bar + .ends + .bar { margin-top: 4px; }
+body.navigating .radar-legend { display: none; }
+
 .targets { list-style: none; padding: 0; margin: 10px 0 0; }
 
 .targets li {
@@ -951,7 +960,8 @@ body.navigating .attribution-note { display: none; }
   .maplibregl-ctrl-top-right .maplibregl-ctrl-group { display: none; }
 
   /* Narrow enough to stay clear of the crosshair in the middle of the map. */
-  .radar-legend { bottom: auto; top: calc(64px + env(safe-area-inset-top)); left: 12px; right: auto; width: 132px; padding: 8px 10px; }
+  .radar-legend { bottom: auto; top: calc(64px + env(safe-area-inset-top)); left: 12px; right: auto; }
+  .radar-legend.open { width: 150px; padding: 8px 10px; }
   .radar-legend .legend-title { font-size: 10px; }
 
   .nav-top { width: calc(100% - 32px); }
