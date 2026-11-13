@@ -950,7 +950,9 @@ body.navigating .attribution-note { display: none; }
   .map-controls .chip span { display: none; }
   .maplibregl-ctrl-top-right .maplibregl-ctrl-group { display: none; }
 
-  .radar-legend { bottom: auto; top: calc(64px + env(safe-area-inset-top)); left: 12px; right: auto; width: 200px; }
+  /* Narrow enough to stay clear of the crosshair in the middle of the map. */
+  .radar-legend { bottom: auto; top: calc(64px + env(safe-area-inset-top)); left: 12px; right: auto; width: 132px; padding: 8px 10px; }
+  .radar-legend .legend-title { font-size: 10px; }
 
   .nav-top { width: calc(100% - 32px); }
   .nav-dist b { font-size: 32px; }
@@ -1049,7 +1051,7 @@ body.navigating .attribution-note { display: none; }
   border: 1.5px solid var(--ch);
   border-radius: 50%;
   pointer-events: none;
-  z-index: 1;
+  z-index: 3; /* above the radar key and map chips */
   opacity: 0.75;
 }
 :root:not([data-theme="light"]) .crosshair { --ch: #ffffff; opacity: 0.5; }

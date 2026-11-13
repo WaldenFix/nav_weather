@@ -2265,6 +2265,8 @@ function placeCrosshair() {
 
 new ResizeObserver(placeCrosshair).observe($('panel'));
 addEventListener('resize', () => { crossAt = null; placeCrosshair(); });
+placeCrosshair();
+mapReady.then(placeCrosshair);
 
 // Moving the map in Chase / Watch looks again around the new crosshair spot.
 let lastScan = null;
